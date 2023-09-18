@@ -970,21 +970,21 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 	if len(pkgs) != 1 {
 		return nil, []error{fmt.Errorf("expected exactly one package")}
 	}
-	graph := gographviz.NewGraph()
-	graph.SetName("G")
-	graph.SetDir(true)
-
 	pkg := pkgs[0]
 	v := newViz(pkg)
 	if errs := v.generateInjector(name); errs != nil {
 		return nil, errs
 	}
+	// Create new graph with escape
+	graph := gographviz.NewEscape()
+	graph.SetName("cluster-all")
+	graph.SetDir(true)
 	// Add given arguments as nodes
 	for _, in := range v.ins {
-		key := escapeString(v.givenKey(in))
-		label := escapeString(v.givenLabel(in))
-		graph.AddNode("G", key, map[string]string{
-			"label": label,
+		key := v.givenKey(in)
+		label := v.givenLabel(in)
+		graph.AddNode("cluster-all", key, map[string]string{
+			"label": `"` + label + `"`,
 			"shape": "octagon",
 		})
 	}
@@ -992,38 +992,41 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 	for i, call := range v.calls {
 		// Sort out the subgraph relationships
 		sets := v.collectSetLabels(v.set.srcMap.At(call.out).(*providerSetSrc), &call.out)
-		for j, set := range sets {
-			sets[j] = escapeString("cluster" + set)
-		}
-		sets = append([]string{"G"}, sets...)
-		for j, set := range sets {
-			if set != "G" && !graph.IsSubGraph(set) {
-				graph.AddSubGraph(sets[j-1], set, map[string]string{
-					"label": set,
+		sets = append([]string{"all"}, sets...)
+		for j := range sets {
+			if j == 0 {
+				continue
+			}
+			// cluster prefix is required for grouping nodes in Graphviz
+			cur := "cluster-" + sets[j]
+			par := "cluster-" + sets[j-1]
+			if !graph.IsSubGraph(cur) {
+				graph.AddSubGraph(par, cur, map[string]string{
+					"label": sets[j],
 					"color": "red",
 				})
 			}
 		}
 		// Find the current provider
-		parent := sets[len(sets)-1]
-		from := escapeString(v.callKey(&call))
-		label := escapeString(v.callLabel(&call))
+		parent := "cluster-" + sets[len(sets)-1]
+		from := v.callKey(&call)
+		label := v.callLabel(&call)
 		graph.AddNode(parent, from, map[string]string{
-			"label": label,
+			"label": `"` + label + `"`,
 			"shape": map[bool]string{true: "box", false: "doubleoctagon"}[i < len(v.calls)-1],
 		})
 		// Add dependencies as edges
 		for _, arg := range call.args {
 			if arg < len(v.ins) {
-				to := escapeString(v.givenKey(v.ins[arg]))
+				to := v.givenKey(v.ins[arg])
 				graph.AddEdge(from, to, true, nil)
 			} else {
-				to := escapeString(v.callKey(&v.calls[arg-len(v.ins)]))
+				to := v.callKey(&v.calls[arg-len(v.ins)])
 				graph.AddEdge(from, to, true, nil)
 			}
 		}
 	}
-	return graph, nil
+	return graph.Graph, nil
 }
 
 func findFuncDecl(pkg *packages.Package, name string) (*ast.FuncDecl, error) {
@@ -1050,10 +1053,6 @@ func newViz(pkg *packages.Package) *viz {
 	return &viz{
 		pkg: pkg,
 	}
-}
-
-func escapeString(s string) string {
-	return `"` + s + `"`
 }
 
 func (v *viz) callKey(call *call) string {
@@ -1147,9 +1146,9 @@ func (v *viz) collectSetLabels(p *providerSetSrc, t *types.Type) []string {
 	if p.Import != nil {
 		if parent := p.Import.srcMap.At(*t); parent != nil {
 			sets := v.collectSetLabels(parent.(*providerSetSrc), t)
-			label := p.Import.PkgPath
-			if p.Import.VarName != "" {
-				label += "#" + p.Import.VarName
+			label := p.Import.PkgPath + "#" + p.Import.VarName
+			if p.Import.VarName == "" {
+				label += "<anonymous>"
 			}
 			return append([]string{label}, sets...)
 		} else {
