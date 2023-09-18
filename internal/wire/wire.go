@@ -1036,7 +1036,7 @@ func findFuncDecl(pkg *packages.Package, name string) (*ast.FuncDecl, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("function %s not found", name)
+	return nil, fmt.Errorf("function %s not found in %s", name, pkg.PkgPath)
 }
 
 type viz struct {
