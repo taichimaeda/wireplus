@@ -5,7 +5,7 @@ Wireviz is a wire command superchaged with graphviz vizualisation.
 The `wireviz` CLI includes an extra command `wireviz graph` which visualizes the dependency graph
 in online Graphviz editor available at [https://edotor.net/](https://edotor.net/)
 
-![wireviz demo](https://user-images.githubusercontent.com/28210288/268555952-52a3fa92-6676-4796-9900-8d18db9ad6d4.png)
+![wireviz demo](https://user-images.githubusercontent.com/28210288/268586107-58cae342-a579-4f38-ba1e-47612572adab.png)
 
 *Demo graph generated from [https://github.com/google/go-cloud](https://github.com/google/go-cloud)
 
