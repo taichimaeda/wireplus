@@ -981,8 +981,8 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 	graph.SetDir(true)
 	// Add given arguments as nodes
 	for _, in := range v.ins {
-		key := v.givenKey(in)
-		label := v.givenLabel(in)
+		key := v.givenIdent(in, "#")
+		label := v.givenIdent(in, `\n`)
 		graph.AddNode("cluster-all", key, map[string]string{
 			"label": `"` + label + `"`,
 			"shape": "octagon",
@@ -1009,8 +1009,8 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 		}
 		// Find the current provider
 		parent := "cluster-" + sets[len(sets)-1]
-		from := v.callKey(&call)
-		label := v.callLabel(&call)
+		from := v.callIdent(&call, "#")
+		label := v.callIdent(&call, `\n`)
 		graph.AddNode(parent, from, map[string]string{
 			"label": `"` + label + `"`,
 			"shape": map[bool]string{true: "box", false: "doubleoctagon"}[i < len(v.calls)-1],
@@ -1018,10 +1018,10 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 		// Add dependencies as edges
 		for _, arg := range call.args {
 			if arg < len(v.ins) {
-				to := v.givenKey(v.ins[arg])
+				to := v.givenIdent(v.ins[arg], "#")
 				graph.AddEdge(from, to, true, nil)
 			} else {
-				to := v.callKey(&v.calls[arg-len(v.ins)])
+				to := v.callIdent(&v.calls[arg-len(v.ins)], "#")
 				graph.AddEdge(from, to, true, nil)
 			}
 		}
@@ -1055,32 +1055,18 @@ func newViz(pkg *packages.Package) *viz {
 	}
 }
 
-func (v *viz) callKey(call *call) string {
+func (v *viz) callIdent(call *call, delim string) string {
 	switch call.kind {
 	case valueExpr:
-		return v.formatExpr(&call.valueExpr)
+		return v.formatExpr(&call.valueExpr) + delim + call.valueTypeInfo.TypeOf(call.valueExpr).String()
 	case funcProviderCall, structProvider, selectorExpr:
-		return call.name
+		return call.name + delim + call.pkg.Path()
 	}
 	panic("unknown kind")
 }
 
-func (v *viz) callLabel(call *call) string {
-	switch call.kind {
-	case valueExpr:
-		return v.formatExpr(&call.valueExpr) + `\n` + call.valueTypeInfo.TypeOf(call.valueExpr).String()
-	case funcProviderCall, structProvider, selectorExpr:
-		return call.name + `\n` + call.pkg.Path()
-	}
-	panic("unknown kind")
-}
-
-func (v *viz) givenKey(given *types.Var) string {
-	return given.Name()
-}
-
-func (v *viz) givenLabel(given *types.Var) string {
-	return given.Name() + `\n` + given.Type().String()
+func (v *viz) givenIdent(given *types.Var, delim string) string {
+	return given.Name() + delim + given.Type().String()
 }
 
 func (v *viz) formatExpr(expr *ast.Expr) string {
