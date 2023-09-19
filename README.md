@@ -22,12 +22,12 @@ and ensuring that `$GOPATH/bin` is added to your `$PATH`.
 ## Usage
 
 ```shell
-wireviz github.com/google/path/to/package initializeApplication
+wireviz graph github.com/google/path/to/package initializeApplication
 ```
 
 or
 
 ```shell
 cd /path/to/package
-wireviz . initializeApplication
+wireviz graph . initializeApplication
 ```
