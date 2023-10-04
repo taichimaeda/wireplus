@@ -1029,19 +1029,6 @@ func Visualize(ctx context.Context, wd string, env []string, pattern string, nam
 	return graph.Graph, nil
 }
 
-func findFuncDecl(pkg *packages.Package, name string) (*ast.FuncDecl, error) {
-	for _, f := range pkg.Syntax {
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok {
-				if fn.Name.Name == name {
-					return fn, nil
-				}
-			}
-		}
-	}
-	return nil, fmt.Errorf("function %s not found in %s", name, pkg.PkgPath)
-}
-
 type viz struct {
 	pkg   *packages.Package
 	calls []call
@@ -1126,6 +1113,19 @@ func (v *viz) generateInjector(name string) []error {
 	}
 	v.set = set
 	return nil
+}
+
+func findFuncDecl(pkg *packages.Package, name string) (*ast.FuncDecl, error) {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Name.Name == name {
+					return fn, nil
+				}
+			}
+		}
+	}
+	return nil, fmt.Errorf("function %s not found in %s", name, pkg.PkgPath)
 }
 
 func (v *viz) collectSetLabels(p *providerSetSrc, t *types.Type) []string {
