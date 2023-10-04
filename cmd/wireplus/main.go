@@ -37,7 +37,7 @@ import (
 	"github.com/awalterschulze/gographviz"
 	"github.com/google/subcommands"
 	"github.com/pmezard/go-difflib/difflib"
-	"github.com/taichimaeda/wireviz/internal/wire"
+	"github.com/taichimaeda/wireplus/internal/wire"
 	"golang.org/x/tools/go/types/typeutil"
 )
 

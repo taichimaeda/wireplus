@@ -1,4 +1,4 @@
-module github.com/taichimaeda/wireviz
+module github.com/taichimaeda/wireplus
 
 go 1.12
 
