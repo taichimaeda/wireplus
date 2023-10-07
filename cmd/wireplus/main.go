@@ -644,7 +644,7 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 	}
 	pattern := f.Args()[0]
 	name := f.Args()[1]
-	graph, errs := wire.Visualize(ctx, wd, os.Environ(), pattern, name, cmd.tags)
+	graph, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
 	if len(errs) > 0 {
 		logErrors(errs)
 		log.Println("graph failed")
