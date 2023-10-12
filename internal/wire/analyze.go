@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -254,6 +255,115 @@ dfs:
 		return nil, errs
 	}
 	return calls, nil
+}
+
+// solvePartial finds the sequence of calls required to produce an output type
+// with an optional set of provided inputs.
+// i < len(call) is index to calls while
+// i >= len(call) is index to missing offset by len(call).
+func solvePartial(fset *token.FileSet, set *ProviderSet) ([]call, []*types.Type) {
+	index := new(typeutil.Map)
+	var calls []call
+	var missing []*types.Type
+
+	outs := set.Outputs()
+	for _, out := range outs {
+		pv := set.For(out)
+		if concrete := pv.Type(); !types.Identical(concrete, out) {
+			// Interface binding does not create a call.
+			continue
+		}
+		index.Set(out, len(calls))
+		calls = append(calls, call{})
+	}
+	for _, out := range outs {
+		pv := set.For(out)
+		if concrete := pv.Type(); !types.Identical(concrete, out) {
+			// Interface binding does not create a call.
+			v := index.At(concrete)
+			if v != nil {
+				index.Set(out, v.(int))
+			} else {
+				index.Set(concrete, len(calls)+len(missing))
+				index.Set(out, len(calls)+len(missing))
+				missing = append(missing, &concrete)
+			}
+			continue
+		}
+
+		curr := index.At(out).(int)
+		switch pv := set.For(out); {
+		case pv.IsProvider():
+			p := pv.Provider()
+			args := make([]int, len(p.Args))
+			ins := make([]types.Type, len(p.Args))
+			for i, pArg := range p.Args {
+				ins[i] = pArg.Type
+				v := index.At(ins[i])
+				if v != nil {
+					args[i] = v.(int)
+				} else {
+					index.Set(ins[i], len(calls)+len(missing))
+					args[i] = len(calls) + len(missing)
+					missing = append(missing, &ins[i])
+				}
+			}
+			kind := funcProviderCall
+			fieldNames := []string(nil)
+			if p.IsStruct {
+				kind = structProvider
+				for _, arg := range p.Args {
+					fieldNames = append(fieldNames, arg.FieldName)
+				}
+			}
+			calls[curr] = call{
+				kind:       kind,
+				pkg:        p.Pkg,
+				name:       p.Name,
+				args:       args,
+				varargs:    p.Varargs,
+				fieldNames: fieldNames,
+				ins:        ins,
+				out:        out,
+				hasCleanup: p.HasCleanup,
+				hasErr:     p.HasErr,
+			}
+		case pv.IsValue():
+			v := pv.Value()
+			calls[curr] = call{
+				kind:          valueExpr,
+				out:           out,
+				valueExpr:     v.expr,
+				valueTypeInfo: v.info,
+			}
+		case pv.IsField():
+			f := pv.Field()
+			// Use args[0] to store the position of the parent struct.
+			args := []int{}
+			v := index.At(f.Parent)
+			if v != nil {
+				args = append(args, v.(int))
+			} else {
+				index.Set(out, len(calls)+len(missing))
+				args = append(args, len(calls)+len(missing))
+				missing = append(missing, &f.Parent)
+			}
+			// If f.Out has 2 elements and out is the 2nd one, then the call must
+			// provide a pointer to the field.
+			ptrToField := len(f.Out) == 2 && types.Identical(out, f.Out[1])
+			calls[curr] = call{
+				kind:       selectorExpr,
+				pkg:        f.Pkg,
+				name:       f.Name,
+				out:        out,
+				args:       args,
+				ptrToField: ptrToField,
+			}
+		default:
+			panic("unknown return value from ProviderSet.For")
+		}
+	}
+	return calls, missing
 }
 
 // verifyArgsUsed ensures that all of the arguments in set were used during solve.
@@ -518,4 +628,94 @@ func bindingConflictError(fset *token.FileSet, typ types.Type, set *ProviderSet,
 	fmt.Fprintf(sb, "current:\n<- %s\n", strings.Join(cur.trace(fset, typ), "\n<- "))
 	fmt.Fprintf(sb, "previous:\n<- %s", strings.Join(prev.trace(fset, typ), "\n<- "))
 	return notePosition(fset.Position(set.Pos), errors.New(sb.String()))
+}
+
+type buildSolution struct {
+	calls []call
+	ins   []*types.Var
+	pset  *ProviderSet
+}
+
+func solveForBuild(pkg *packages.Package, name string) (*buildSolution, []error) {
+	fn := findFuncDecl(pkg, name)
+	if fn == nil {
+		return nil, []error{fmt.Errorf("no function named %s found", name)}
+	}
+	build, err := findInjectorBuild(pkg.TypesInfo, fn)
+	if err != nil {
+		return nil, []error{err}
+	}
+	if build == nil {
+		return nil, []error{fmt.Errorf("no injector build call found")}
+	}
+	sig := pkg.TypesInfo.ObjectOf(fn.Name).Type().(*types.Signature)
+	params, out, err := injectorFuncSignature(sig)
+	if err != nil {
+		if w, ok := err.(*wireErr); ok {
+			return nil, []error{notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error))}
+		} else {
+			return nil, []error{notePosition(pkg.Fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, err))}
+		}
+	}
+	injectorArgs := &InjectorArgs{
+		Name:  fn.Name.Name,
+		Tuple: params,
+		Pos:   fn.Pos(),
+	}
+	oc := newObjectCache([]*packages.Package{pkg})
+	pset, errs := oc.processNewSet(pkg.TypesInfo, pkg.PkgPath, build, injectorArgs, "")
+	if len(errs) > 0 {
+		return nil, notePositionAll(pkg.Fset.Position(fn.Pos()), errs)
+	}
+	calls, errs := solve(pkg.Fset, out.out, params, pset)
+	if len(errs) > 0 {
+		return nil, mapErrors(errs, func(e error) error {
+			if w, ok := e.(*wireErr); ok {
+				return notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error))
+			}
+			return notePosition(pkg.Fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, e))
+		})
+	}
+	var ins []*types.Var
+	for i := 0; i < params.Len(); i++ {
+		ins = append(ins, params.At(i))
+	}
+	sol := &buildSolution{
+		calls: calls,
+		ins:   ins,
+		pset:  pset,
+	}
+	return sol, errs
+}
+
+type newSetSolution struct {
+	calls   []call
+	missing []*types.Type
+	pset    *ProviderSet
+}
+
+func solveForNewSet(pkg *packages.Package, name string) (*newSetSolution, []error) {
+	set := findVarValue(pkg, name)
+	if set == nil {
+		return nil, []error{fmt.Errorf("no value named %s found", name)}
+	}
+	newSet, err := findInjectorNewSet(pkg.TypesInfo, set)
+	if err != nil {
+		return nil, []error{err}
+	}
+	if newSet == nil {
+		return nil, []error{fmt.Errorf("no injector NewSet call found")}
+	}
+	oc := newObjectCache([]*packages.Package{pkg})
+	pset, errs := oc.processNewSet(pkg.TypesInfo, pkg.PkgPath, newSet, nil, name)
+	if len(errs) > 0 {
+		return nil, errs
+	}
+	calls, missing := solvePartial(pkg.Fset, pset)
+	sol := &newSetSolution{
+		calls:   calls,
+		missing: missing,
+		pset:    pset,
+	}
+	return sol, nil
 }

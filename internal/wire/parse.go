@@ -1133,6 +1133,18 @@ func findInjectorBuild(info *types.Info, fn *ast.FuncDecl) (*ast.CallExpr, error
 	return wireBuildCall, nil
 }
 
+func findInjectorNewSet(info *types.Info, expr *ast.Expr) (*ast.CallExpr, error) {
+	call, ok := (*expr).(*ast.CallExpr)
+	if !ok {
+		return nil, errors.New("injector must be a function call")
+	}
+	setObj := qualifiedIdentObject(info, call.Fun)
+	if setObj == nil || setObj.Pkg() == nil || !isWireImport(setObj.Pkg().Path()) || setObj.Name() != "NewSet" {
+		return nil, errors.New("injector must be a call to wire.NewSet")
+	}
+	return call, nil
+}
+
 func isWireImport(path string) bool {
 	// TODO(light): This is depending on details of the current loader.
 	const vendorPart = "vendor/"
@@ -1173,9 +1185,9 @@ func (pt ProvidedType) IsNil() bool {
 //
 //   - For a function provider, this is the first return value type.
 //   - For a struct provider, this is either the struct type or the pointer type
-// 	   whose element type is the struct type.
-// 	 - For a value, this is the type of the expression.
-// 	 - For an argument, this is the type of the argument.
+//     whose element type is the struct type.
+//   - For a value, this is the type of the expression.
+//   - For an argument, this is the type of the argument.
 func (pt ProvidedType) Type() types.Type {
 	return pt.t
 }
@@ -1244,4 +1256,37 @@ func bindShouldUsePointer(info *types.Info, call *ast.CallExpr) bool {
 	pkgName := fun.X.(*ast.Ident)                       // wire
 	wireName := info.ObjectOf(pkgName).(*types.PkgName) // wire package
 	return wireName.Imported().Scope().Lookup("bindToUsePointer") != nil
+}
+
+func findFuncDecl(pkg *packages.Package, name string) *ast.FuncDecl {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Name.Name == name {
+					return fn
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func findVarValue(pkg *packages.Package, name string) *ast.Expr {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			// Matching against top-level variable declaration with the given name.
+			if gDecl, ok := decl.(*ast.GenDecl); ok && gDecl.Tok == token.VAR {
+				for _, spec := range gDecl.Specs {
+					if vSpec, ok := spec.(*ast.ValueSpec); ok {
+						for i, ident := range vSpec.Names {
+							if ident.Name == name {
+								return &vSpec.Values[i]
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
 }

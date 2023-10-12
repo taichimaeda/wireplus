@@ -34,7 +34,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/awalterschulze/gographviz"
 	"github.com/google/subcommands"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/taichimaeda/wireplus/internal/wire"
@@ -644,21 +643,21 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 	}
 	pattern := f.Args()[0]
 	name := f.Args()[1]
-	graph, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
+	gviz, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
 	if len(errs) > 0 {
 		logErrors(errs)
 		log.Println("graph failed")
 		return subcommands.ExitFailure
 	}
-	if err := showGraphInBrowser(graph); err != nil {
+	if err := showGraphInBrowser(gviz); err != nil {
 		log.Println("failed to show graph in browser: ", err)
 		return subcommands.ExitFailure
 	}
 	return subcommands.ExitSuccess
 }
 
-func showGraphInBrowser(graph *gographviz.Graph) error {
-	dot := strings.Replace(url.QueryEscape(graph.String()), "+", "%20", -1)
+func showGraphInBrowser(gviz *wire.Graphviz) error {
+	dot := strings.Replace(url.QueryEscape(gviz.String()), "+", "%20", -1)
 	url := "https://edotor.net/#" + dot
 	if err := openUrlInBrowser(url); err != nil {
 		return err
