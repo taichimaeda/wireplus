@@ -84,7 +84,7 @@ func Generate(ctx context.Context, wd string, env []string, patterns []string, o
 	if opts == nil {
 		opts = &GenerateOptions{}
 	}
-	pkgs, errs := load(ctx, wd, env, opts.Tags, patterns)
+	pkgs, errs := LoadPackages(ctx, wd, env, opts.Tags, patterns)
 	if len(errs) > 0 {
 		return nil, errs
 	}

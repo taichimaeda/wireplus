@@ -10,6 +10,11 @@ type Range struct {
 	End   Position `json:"end"`
 }
 
+type Location struct {
+	Uri   string `json:"uri"`
+	Range Range  `json:"range"`
+}
+
 type TextDocumentIdentifier struct {
 	Uri string `json:"uri"`
 }
@@ -55,10 +60,11 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	TextDocumentSync int                         `json:"textDocumentSync"`
-	HoverProvider    bool                        `json:"hoverProvider"`
-	CodeLensProvider bool                        `json:"codeLensProvider"`
-	Workspace        WorkspaceServerCapabilities `json:"workspace"`
+	TextDocumentSync   int                         `json:"textDocumentSync"`
+	HoverProvider      bool                        `json:"hoverProvider"`
+	CodeLensProvider   bool                        `json:"codeLensProvider"`
+	DefinitionProvider bool                        `json:"definition"`
+	Workspace          WorkspaceServerCapabilities `json:"workspace"`
 }
 
 type WorkspaceServerCapabilities struct {
@@ -80,6 +86,24 @@ type ShutdownResponse struct {
 	Result  interface{} `json:"result"`
 }
 
+type DefinitionRequest struct {
+	Jsonrpc string           `json:"jsonrpc"`
+	Id      int              `json:"id"`
+	Method  string           `json:"method"`
+	Params  DefinitionParams `json:"Params"`
+}
+
+type DefinitionParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+	Position     Position               `json:"position"`
+}
+
+type DefinitionResponse struct {
+	Jsonrpc string    `json:"jsonrpc"`
+	Id      int       `json:"id"`
+	Result  *Location `json:"result"`
+}
+
 type HoverRequest struct {
 	Jsonrpc string      `json:"jsonrpc"`
 	Id      int         `json:"id"`
@@ -93,12 +117,12 @@ type HoverParams struct {
 }
 
 type HoverResponse struct {
-	Jsonrpc string       `json:"jsonrpc"`
-	Id      int          `json:"id"`
-	Result  *HoverResult `json:"result"`
+	Jsonrpc string `json:"jsonrpc"`
+	Id      int    `json:"id"`
+	Result  *Hover `json:"result"`
 }
 
-type HoverResult struct {
+type Hover struct {
 	Contents MarkupContent `json:"contents"`
 }
 

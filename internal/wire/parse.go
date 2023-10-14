@@ -249,7 +249,7 @@ type Field struct {
 // In case of duplicate environment variables, the last one in the list
 // takes precedence.
 func Load(ctx context.Context, wd string, env []string, tags string, patterns []string) (*Info, []error) {
-	pkgs, errs := load(ctx, wd, env, tags, patterns)
+	pkgs, errs := LoadPackages(ctx, wd, env, tags, patterns)
 	if len(errs) > 0 {
 		return nil, errs
 	}
@@ -340,7 +340,7 @@ func Load(ctx context.Context, wd string, env []string, tags string, patterns []
 	return info, ec.errors
 }
 
-// load typechecks the packages that match the given patterns and
+// LoadPackages typechecks the packages that match the given patterns and
 // includes source for all transitive dependencies. The patterns are
 // defined by the underlying build system. For the go tool, this is
 // described at https://golang.org/cmd/go/#hdr-Package_lists_and_patterns
@@ -350,7 +350,7 @@ func Load(ctx context.Context, wd string, env []string, tags string, patterns []
 // env is nil or empty, it is interpreted as an empty set of variables.
 // In case of duplicate environment variables, the last one in the list
 // takes precedence.
-func load(ctx context.Context, wd string, env []string, tags string, patterns []string) ([]*packages.Package, []error) {
+func LoadPackages(ctx context.Context, wd string, env []string, tags string, patterns []string) ([]*packages.Package, []error) {
 	cfg := &packages.Config{
 		Context:    ctx,
 		Mode:       packages.LoadAllSyntax,
@@ -1260,7 +1260,7 @@ func bindShouldUsePointer(info *types.Info, call *ast.CallExpr) bool {
 	return wireName.Imported().Scope().Lookup("bindToUsePointer") != nil
 }
 
-func findFuncDecl(pkg *packages.Package, name string) *ast.FuncDecl {
+func findFuncDeclByName(pkg *packages.Package, name string) *ast.FuncDecl {
 	for _, f := range pkg.Syntax {
 		for _, decl := range f.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok {
@@ -1273,7 +1273,8 @@ func findFuncDecl(pkg *packages.Package, name string) *ast.FuncDecl {
 	return nil
 }
 
-func findVarValue(pkg *packages.Package, name string) *ast.Expr {
+// TODO: can be replaced by types.Scope
+func findVarExprByName(pkg *packages.Package, name string) *ast.Expr {
 	for _, f := range pkg.Syntax {
 		for _, decl := range f.Decls {
 			// Matching against top-level variable declaration with the given name.

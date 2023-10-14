@@ -637,7 +637,7 @@ type buildSolution struct {
 }
 
 func solveForBuild(pkg *packages.Package, name string) (*buildSolution, []error) {
-	fn := findFuncDecl(pkg, name)
+	fn := findFuncDeclByName(pkg, name)
 	if fn == nil {
 		return nil, []error{fmt.Errorf("no function named %s found", name)}
 	}
@@ -695,7 +695,7 @@ type newSetSolution struct {
 }
 
 func solveForNewSet(pkg *packages.Package, name string) (*newSetSolution, []error) {
-	set := findVarValue(pkg, name)
+	set := findVarExprByName(pkg, name)
 	if set == nil {
 		return nil, []error{fmt.Errorf("no value named %s found", name)}
 	}

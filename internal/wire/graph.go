@@ -22,7 +22,7 @@ func Graph(ctx context.Context, wd string, env []string, pattern string, name st
 	gviz.SetName("cluster-all")
 	gviz.SetDir(true)
 
-	pkgs, errs := load(ctx, wd, env, tags, []string{pattern})
+	pkgs, errs := LoadPackages(ctx, wd, env, tags, []string{pattern})
 	if len(errs) > 0 {
 		return nil, errs
 	}
@@ -30,8 +30,8 @@ func Graph(ctx context.Context, wd string, env []string, pattern string, name st
 		return nil, []error{fmt.Errorf("expected exactly one package")}
 	}
 	pkg := pkgs[0]
-	fn := findFuncDecl(pkg, name)
-	set := findVarValue(pkg, name)
+	fn := findFuncDeclByName(pkg, name)
+	set := findVarExprByName(pkg, name)
 
 	switch {
 	case set != nil:

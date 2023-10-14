@@ -22,6 +22,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"go/ast"
 	"go/token"
 	"go/types"
 	"io/ioutil"
@@ -40,6 +41,7 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/taichimaeda/wireplus/internal/wire"
 	"github.com/taichimaeda/wireplus/internal/wire/lsp"
+	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -773,7 +775,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				}
 				res := cmd.processCodeLensRequest(ctx, req)
 				lsp.SendMessage(res)
-			case "textDocument/jump":
+			case "textDocument/definition":
+				req := &lsp.DefinitionRequest{}
+				if ok := lsp.ParseRequest(buf, req); !ok {
+					continue
+				}
+				res := cmd.processDefinitionRequest(ctx, req)
+				lsp.SendMessage(res)
 			default:
 				fmt.Fprintf(os.Stderr, "invalid method: %v\n", method)
 			}
@@ -787,9 +795,10 @@ func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.Ini
 		Id:      req.Id,
 		Result: &lsp.InitializeResult{
 			Capabilities: lsp.ServerCapabilities{
-				TextDocumentSync: 2, // 2: Incremental
-				HoverProvider:    true,
-				CodeLensProvider: true,
+				TextDocumentSync:   2, // 2: Incremental
+				HoverProvider:      true,
+				CodeLensProvider:   true,
+				DefinitionProvider: true,
 			},
 		},
 	}
@@ -825,6 +834,7 @@ func (cmd *lspCmd) processHoverRequest(ctx context.Context, req *lsp.HoverReques
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
+	// TODO: Load is simple but can be made more efficient by providing file path
 	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
 	if len(errs) > 0 {
 		for _, err := range errs {
@@ -870,11 +880,82 @@ func (cmd *lspCmd) processHoverRequest(ctx context.Context, req *lsp.HoverReques
 			break
 		}
 	}
-	res.Result = &lsp.HoverResult{
+	res.Result = &lsp.Hover{
 		Contents: lsp.MarkupContent{
 			Kind:  "plaintext",
 			Value: sb.String(),
 		},
+	}
+	return res
+}
+
+func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest) *lsp.DefinitionResponse {
+	res := &lsp.DefinitionResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result:  nil,
+	}
+	url, err := url.Parse(req.Params.TextDocument.Uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+		return res
+	}
+	wd := filepath.Dir(url.Path)
+	pattern := []string{"."}
+	pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
+	if len(errs) > 0 {
+		fmt.Fprintf(os.Stderr, "")
+		return res
+	}
+	if len(pkgs) != 1 {
+		fmt.Fprintf(os.Stderr, "")
+		return res
+	}
+	pkg := pkgs[0]
+	pos := lsp.CalculatePos(pkg.Fset, url.Path, req.Params.Position.Line, req.Params.Position.Character)
+	file := pkg.Fset.Position(pos).Filename
+	for _, f := range pkg.Syntax {
+		if file != url.Path {
+			continue
+		}
+		path, ok := astutil.PathEnclosingInterval(f, pos, pos)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "")
+			return res
+		}
+		node := path[0]
+		if ident, ok := node.(*ast.Ident); ok {
+			obj := pkg.TypesInfo.ObjectOf(ident)
+			wd := pkg.Module.Path
+			pattern := []string{obj.Pkg().Path()}
+			pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
+			if len(errs) > 0 {
+				fmt.Fprintf(os.Stderr, "")
+				return res
+			}
+			if len(pkgs) != 1 {
+				fmt.Fprintf(os.Stderr, "")
+				return res
+			}
+			pkg := pkgs[0]
+			position := pkg.Fset.Position(obj.Pos())
+			line := position.Line
+			char := position.Column
+			res.Result = &lsp.Location{
+				Uri: obj.Pkg().Path(),
+				Range: lsp.Range{
+					Start: lsp.Position{
+						Line:      line,
+						Character: char,
+					},
+					End: lsp.Position{
+						Line:      line,
+						Character: char,
+					},
+				},
+			}
+			return res
+		}
 	}
 	return res
 }
@@ -892,9 +973,13 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 	// to clear existing diagnostics
 	diags := make([]lsp.Diagnostic, 0)
 	for _, err := range errs {
-		wErr := err.(*wire.WireErr)
-		line := wErr.Position().Line - 1
-		char := wErr.Position().Column - 1
+		werr := err.(*wire.WireErr)
+		file := werr.Position().Filename
+		if file != url.Path {
+			continue
+		}
+		line := werr.Position().Line - 1
+		char := werr.Position().Column - 1
 		diags = append(diags, lsp.Diagnostic{
 			Range: lsp.Range{
 				Start: lsp.Position{
@@ -906,7 +991,7 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 					Character: 0,
 				},
 			},
-			Message: wErr.Message(),
+			Message: werr.Message(),
 		})
 	}
 	notif := &lsp.PublishDiagnosticsNotification{

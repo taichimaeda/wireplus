@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"go/token"
 	"io"
 	"os"
 	"strconv"
@@ -85,16 +86,16 @@ func SendMessage(res interface{}) bool {
 	return true
 }
 
-// func calculatePos(fset *token.FileSet, path string, line int, char int) token.Pos {
-// 	var file *token.File
-// 	fset.Iterate(func(f *token.File) bool {
-// 		if f.Name() == path {
-// 			file = f
-// 			return false
-// 		}
-// 		return true
-// 	})
-// 	offset := int(file.LineStart(line)) - int(file.Base())
-// 	offset += char
-// 	return file.Pos(offset)
-// }
+func CalculatePos(fset *token.FileSet, path string, line int, char int) token.Pos {
+	var file *token.File
+	fset.Iterate(func(f *token.File) bool {
+		if f.Name() == path {
+			file = f
+			return false
+		}
+		return true
+	})
+	offset := int(file.LineStart(line)) - int(file.Base())
+	offset += char
+	return file.Pos(offset)
+}
