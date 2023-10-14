@@ -62,6 +62,17 @@ type WorkspaceFoldersServerCapabilities struct {
 	Supported bool `json:"supported"`
 }
 
+type ShutdownRequest struct {
+	Jsonrpc string `json:"jsonrpc"`
+	Id      int    `json:"id"`
+}
+
+type ShutdownResponse struct {
+	Jsonrpc string      `json:"jsonrpc"`
+	Id      int         `json:"id"`
+	Result  interface{} `json:"result"`
+}
+
 type HoverRequest struct {
 	Jsonrpc string      `json:"jsonrpc"`
 	Id      int         `json:"id"`

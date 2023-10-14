@@ -730,7 +730,10 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 			case "initialized":
 				// Prints to stderr for debugging purpose
 				fmt.Fprintln(os.Stderr, "initialized")
-			case "textDocument/didSave":
+			case "exit":
+				fmt.Fprintln(os.Stderr, "exit")
+				return subcommands.ExitFailure
+			case "textDocument/didOpen", "textDocument/didSave":
 				event := &lsp.DidSaveTextDocumentNotification{}
 				if ok := lsp.ParseRequest(buf, event); !ok {
 					continue
@@ -749,6 +752,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 					continue
 				}
 				res := cmd.processInitializeRequest(req)
+				lsp.SendMessage(res)
+			case "shutdown":
+				req := &lsp.ShutdownRequest{}
+				if ok := lsp.ParseRequest(buf, req); !ok {
+					continue
+				}
+				res := cmd.processShutdownRequest(req)
 				lsp.SendMessage(res)
 			case "textDocument/hover":
 				req := &lsp.HoverRequest{}
@@ -783,6 +793,15 @@ func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.Ini
 	if wsConfigCap {
 		wsServerCap := res.Result.Capabilities.Workspace
 		wsServerCap.WorkspaceFolders.Supported = true
+	}
+	return res
+}
+
+func (cmd *lspCmd) processShutdownRequest(req *lsp.ShutdownRequest) *lsp.ShutdownResponse {
+	res := &lsp.ShutdownResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result:  nil,
 	}
 	return res
 }
