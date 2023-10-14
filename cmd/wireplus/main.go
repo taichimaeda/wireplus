@@ -798,7 +798,7 @@ func (cmd *lspCmd) handleHoverRequest(ctx context.Context, req *lsp.HoverRequest
 	var key wire.ProviderSetID
 	for k, set := range info.Sets {
 		file := info.Fset.File(set.Pos)
-		line := info.Fset.Position(set.Pos).Line
+		line := info.Fset.Position(set.Pos).Line - 1
 		// file.Name actually returns an absolute path in this case.
 		if file.Name() == url.Path && line == req.Params.Position.Line {
 			key = k
