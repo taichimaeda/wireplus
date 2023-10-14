@@ -619,7 +619,8 @@ func logErrors(errs []error) {
 }
 
 type graphCmd struct {
-	tags string
+	tags    string
+	browser bool
 }
 
 func (*graphCmd) Name() string { return "graph" }
@@ -634,6 +635,7 @@ func (*graphCmd) Usage() string {
 }
 func (cmd *graphCmd) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&cmd.tags, "tags", "", "append build tags to the default wirebuild")
+	f.BoolVar(&cmd.browser, "browser", false, "show generated graph in browser")
 }
 func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interface{}) subcommands.ExitStatus {
 	wd, err := os.Getwd()
@@ -645,6 +647,7 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 		log.Println("graph requires two arguments: package and injector")
 		return subcommands.ExitFailure
 	}
+	// TODO: pattern
 	pattern := f.Args()[0]
 	name := f.Args()[1]
 	gviz, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
@@ -653,36 +656,33 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 		log.Println("graph failed")
 		return subcommands.ExitFailure
 	}
-	if err := showGraphInBrowser(gviz); err != nil {
-		log.Println("failed to show graph in browser: ", err)
-		return subcommands.ExitFailure
+	if cmd.browser {
+		if err := showGraphInBrowser(gviz); err != nil {
+			log.Println("failed to show graph in browser: ", err)
+			return subcommands.ExitFailure
+		} else {
+			return subcommands.ExitSuccess
+		}
 	}
+	// Print data to stdout as output
+	fmt.Println(gviz.String())
 	return subcommands.ExitSuccess
 }
 
 func showGraphInBrowser(gviz *wire.Graphviz) error {
-	dot := strings.Replace(url.QueryEscape(gviz.String()), "+", "%20", -1)
+	data := gviz.String()
+	dot := strings.Replace(url.QueryEscape(data), "+", "%20", -1)
 	url := "https://edotor.net/#" + dot
-	if err := openUrlInBrowser(url); err != nil {
-		return err
-	}
-	return nil
-}
-
-func openUrlInBrowser(url string) error {
-	log.Print(url)
-	var err error
 	switch runtime.GOOS {
 	case "linux":
-		err = exec.Command("xdg-open", url).Start()
+		return exec.Command("xdg-open", url).Start()
 	case "windows":
-		err = exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
 	case "darwin":
-		err = exec.Command("open", url).Start()
+		return exec.Command("open", url).Start()
 	default:
-		err = fmt.Errorf("unsupported platform")
+		return fmt.Errorf("unsupported platform")
 	}
-	return err
 }
 
 type lspCmd struct {
@@ -726,14 +726,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 		}
 		if _, ok := msg["id"]; !ok {
 			// Notification received
+			fmt.Fprintf(os.Stderr, "received notification: %v\n", string(buf))
 			switch method {
 			case "initialized":
-				// Prints to stderr for debugging purpose
-				fmt.Fprintln(os.Stderr, "initialized")
 			case "exit":
-				fmt.Fprintln(os.Stderr, "exit")
 				return subcommands.ExitFailure
-			case "textDocument/didOpen", "textDocument/didSave":
+			// TODO
+			case "textDocument/didOpen", "textDocument/didSave", "textDocument/didChange":
 				event := &lsp.DidSaveTextDocumentNotification{}
 				if ok := lsp.ParseRequest(buf, event); !ok {
 					continue
@@ -742,7 +741,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 					lsp.SendMessage(notif)
 				}
 			default:
-				fmt.Fprintf(os.Stderr, "received notification: %v\n", string(buf))
+				fmt.Fprintf(os.Stderr, "invalid notification: %v\n", string(buf))
 			}
 		} else {
 			switch method {
@@ -767,7 +766,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				}
 				res := cmd.processHoverRequest(ctx, req)
 				lsp.SendMessage(res)
-			case "textDocument/codelens":
+			case "textDocument/codeLens":
+				req := &lsp.CodeLensRequest{}
+				if ok := lsp.ParseRequest(buf, req); !ok {
+					continue
+				}
+				res := cmd.processCodeLensRequest(ctx, req)
+				lsp.SendMessage(res)
 			case "textDocument/jump":
 			default:
 				fmt.Fprintf(os.Stderr, "invalid method: %v\n", method)
@@ -784,6 +789,7 @@ func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.Ini
 			Capabilities: lsp.ServerCapabilities{
 				TextDocumentSync: 2, // 2: Incremental
 				HoverProvider:    true,
+				CodeLensProvider: true,
 			},
 		},
 	}
@@ -882,7 +888,9 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
 	_, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
-	var diags []lsp.Diagnostic
+	// Need to return an empty slice when no error exists
+	// to clear existing diagnostics
+	diags := make([]lsp.Diagnostic, 0)
 	for _, err := range errs {
 		wErr := err.(*wire.WireErr)
 		line := wErr.Position().Line - 1
@@ -910,4 +918,75 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 		},
 	}
 	return notif, true
+}
+
+func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest) *lsp.CodeLensResponse {
+	res := &lsp.CodeLensResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result:  nil,
+	}
+	url, err := url.Parse(req.Params.TextDocument.Uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+		return res
+	}
+	wd := filepath.Dir(url.Path)
+	pattern := []string{"."}
+	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
+	if len(errs) > 0 {
+		for _, err := range errs {
+			fmt.Fprintln(os.Stderr, err.Error())
+		}
+		return res
+	}
+	if info == nil {
+		return res
+	}
+	type item struct {
+		pos  token.Pos
+		name string
+	}
+	var items []item
+	for _, inj := range info.Injectors {
+		items = append(items, item{
+			pos:  inj.Pos,
+			name: inj.FuncName,
+		})
+	}
+	for _, set := range info.Sets {
+		items = append(items, item{
+			pos:  set.Pos,
+			name: set.VarName,
+		})
+	}
+	var codeLenses []lsp.CodeLens
+	for _, item := range items {
+		file := info.Fset.File(item.pos)
+		if file.Name() != url.Path {
+			continue
+		}
+		position := info.Fset.Position(item.pos)
+		line := position.Line - 1
+		char := position.Column - 1
+		codeLenses = append(codeLenses, lsp.CodeLens{
+			Range: lsp.Range{
+				Start: lsp.Position{
+					Line:      line,
+					Character: char,
+				},
+				End: lsp.Position{
+					Line:      line,
+					Character: char,
+				},
+			},
+			Command: lsp.Command{
+				Title:     "Show Graph",
+				Command:   "exampleExtension.showGraph",
+				Arguments: []interface{}{wd, item.name},
+			},
+		})
+	}
+	res.Result = codeLenses
+	return res
 }

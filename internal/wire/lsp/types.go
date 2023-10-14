@@ -19,6 +19,12 @@ type MarkupContent struct {
 	Value string `json:"value"`
 }
 
+type Command struct {
+	Title     string        `json:"title"`
+	Command   string        `json:"command"`
+	Arguments []interface{} `json:"arguments"`
+}
+
 type InitializeRequest struct {
 	Jsonrpc string           `json:"jsonrpc"`
 	Id      int              `json:"id"`
@@ -51,6 +57,7 @@ type InitializeResult struct {
 type ServerCapabilities struct {
 	TextDocumentSync int                         `json:"textDocumentSync"`
 	HoverProvider    bool                        `json:"hoverProvider"`
+	CodeLensProvider bool                        `json:"codeLensProvider"`
 	Workspace        WorkspaceServerCapabilities `json:"workspace"`
 }
 
@@ -93,6 +100,28 @@ type HoverResponse struct {
 
 type HoverResult struct {
 	Contents MarkupContent `json:"contents"`
+}
+
+type CodeLensRequest struct {
+	Jsonrpc string         `json:"jsonrpc"`
+	Id      int            `json:"id"`
+	Method  string         `json:"method"`
+	Params  CodeLensParams `json:"Params"`
+}
+
+type CodeLensParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+type CodeLensResponse struct {
+	Jsonrpc string     `json:"jsonrpc"`
+	Id      int        `json:"id"`
+	Result  []CodeLens `json:"result"`
+}
+
+type CodeLens struct {
+	Range   Range   `json:"range"`
+	Command Command `json:"command"`
 }
 
 type DidSaveTextDocumentNotification struct {

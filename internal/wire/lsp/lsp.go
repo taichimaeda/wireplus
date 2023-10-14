@@ -81,8 +81,7 @@ func SendMessage(res interface{}) bool {
 	}
 	fmt.Printf("Content-Length: %d\r\n", len(bytes))
 	fmt.Printf("\r\n")
-	// TODO: \r\n at the end is redundant
-	fmt.Print(string(bytes) + "\r\n")
+	fmt.Print(string(bytes))
 	return true
 }
 
