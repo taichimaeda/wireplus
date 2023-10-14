@@ -44,8 +44,8 @@ func mapErrors(errs []error, f func(error) error) []error {
 	return newErrs
 }
 
-// A wireErr is an error with an optional position.
-type wireErr struct {
+// WireErr is an error with an optional position.
+type WireErr struct {
 	error    error
 	position token.Position
 }
@@ -61,10 +61,10 @@ func notePosition(p token.Position, e error) error {
 	switch e.(type) {
 	case nil:
 		return nil
-	case *wireErr:
+	case *WireErr:
 		return e
 	default:
-		return &wireErr{error: e, position: p}
+		return &WireErr{error: e, position: p}
 	}
 }
 
@@ -76,9 +76,19 @@ func notePositionAll(p token.Position, errs []error) []error {
 }
 
 // Error returns the error message prefixed by the position if valid.
-func (w *wireErr) Error() string {
+func (w *WireErr) Error() string {
 	if !w.position.IsValid() {
 		return w.error.Error()
 	}
 	return w.position.String() + ": " + w.error.Error()
+}
+
+// Message returns the original error message.
+func (w *WireErr) Message() string {
+	return w.error.Error()
+}
+
+// Position returns the error position.
+func (w *WireErr) Position() token.Position {
+	return w.position
 }

@@ -651,7 +651,7 @@ func solveForBuild(pkg *packages.Package, name string) (*buildSolution, []error)
 	sig := pkg.TypesInfo.ObjectOf(fn.Name).Type().(*types.Signature)
 	params, out, err := injectorFuncSignature(sig)
 	if err != nil {
-		if w, ok := err.(*wireErr); ok {
+		if w, ok := err.(*WireErr); ok {
 			return nil, []error{notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error))}
 		} else {
 			return nil, []error{notePosition(pkg.Fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, err))}
@@ -670,7 +670,7 @@ func solveForBuild(pkg *packages.Package, name string) (*buildSolution, []error)
 	calls, errs := solve(pkg.Fset, out.out, params, pset)
 	if len(errs) > 0 {
 		return nil, mapErrors(errs, func(e error) error {
-			if w, ok := e.(*wireErr); ok {
+			if w, ok := e.(*WireErr); ok {
 				return notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error))
 			}
 			return notePosition(pkg.Fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, e))

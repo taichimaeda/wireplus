@@ -728,7 +728,16 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 			// Notification received
 			switch method {
 			case "initialized":
+				// Prints to stderr for debugging purpose
 				fmt.Fprintln(os.Stderr, "initialized")
+			case "textDocument/didSave":
+				event := &lsp.DidSaveTextDocumentNotification{}
+				if ok := lsp.ParseRequest(buf, event); !ok {
+					continue
+				}
+				if notif, ok := cmd.createPublishDiagnosticsNotification(ctx, event); ok {
+					lsp.SendMessage(notif)
+				}
 			default:
 				fmt.Fprintf(os.Stderr, "received notification: %v\n", string(buf))
 			}
@@ -739,18 +748,17 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.handleInitializeRequest(req)
-				lsp.StringifyResponse(res)
+				res := cmd.processInitializeRequest(req)
+				lsp.SendMessage(res)
 			case "textDocument/hover":
 				req := &lsp.HoverRequest{}
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.handleHoverRequest(ctx, req)
-				lsp.StringifyResponse((res))
+				res := cmd.processHoverRequest(ctx, req)
+				lsp.SendMessage(res)
 			case "textDocument/codelens":
 			case "textDocument/jump":
-			case "textDocument/diagnostics":
 			default:
 				fmt.Fprintf(os.Stderr, "invalid method: %v\n", method)
 			}
@@ -758,102 +766,129 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 	}
 }
 
-func (cmd *lspCmd) handleInitializeRequest(req *lsp.InitializeRequest) *lsp.InitializeResponse {
-	// configCap := req.Params.Capabilities.Workspace.Configuration
-	workspaceConfigCap := req.Params.Capabilities.Workspace.WorkspaceFolders
+func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.InitializeResponse {
 	res := &lsp.InitializeResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
-		Result: lsp.InitializeResult{
+		Result: &lsp.InitializeResult{
 			Capabilities: lsp.ServerCapabilities{
 				TextDocumentSync: 2, // 2: Incremental
 				HoverProvider:    true,
 			},
 		},
 	}
-	if workspaceConfigCap {
-		res.Result.Capabilities.Workspace.WorkspaceFolders.Supported = true
+	wsClientCap := req.Params.Capabilities.Workspace
+	// configCap := wsClientCap.Configuration
+	wsConfigCap := wsClientCap.WorkspaceFolders
+	if wsConfigCap {
+		wsServerCap := res.Result.Capabilities.Workspace
+		wsServerCap.WorkspaceFolders.Supported = true
 	}
 	return res
 }
 
-func (cmd *lspCmd) handleHoverRequest(ctx context.Context, req *lsp.HoverRequest) *lsp.HoverResponse {
+func (cmd *lspCmd) processHoverRequest(ctx context.Context, req *lsp.HoverRequest) *lsp.HoverResponse {
+	res := &lsp.HoverResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result:  nil,
+	}
 	url, err := url.Parse(req.Params.TextDocument.Uri)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
-		return nil
+		return res
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
 	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
 	if len(errs) > 0 {
 		for _, err := range errs {
-			fmt.Fprint(os.Stderr, err.Error())
+			fmt.Fprintln(os.Stderr, err.Error())
 		}
-		return nil
+		return res
 	}
 	if info == nil {
-		return nil
+		return res
 	}
-	var key wire.ProviderSetID
-	for k, set := range info.Sets {
+	// Search for wire.NewSet at the given pos.
+	var sb strings.Builder
+	for key, set := range info.Sets {
 		file := info.Fset.File(set.Pos)
 		line := info.Fset.Position(set.Pos).Line - 1
 		// file.Name actually returns an absolute path in this case.
 		if file.Name() == url.Path && line == req.Params.Position.Line {
-			key = k
-		}
-	}
-	var sb strings.Builder
-	switch {
-	case key != wire.ProviderSetID{}:
-		outGroups, imports := gather(info, key)
-		sb.WriteString(key.String())
-		for _, imp := range sortSet(imports) {
-			sb.WriteString(fmt.Sprintf("\t%s\n", imp))
-		}
-		for i := range outGroups {
-			sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
-			out := make(map[string]token.Pos, outGroups[i].outputs.Len())
-			outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
-				switch v := v.(type) {
-				case *wire.Provider:
-					out[types.TypeString(t, nil)] = v.Pos
-				case *wire.Value:
-					out[types.TypeString(t, nil)] = v.Pos
-				case *wire.Field:
-					out[types.TypeString(t, nil)] = v.Pos
-				default:
-					panic("unreachable")
+			outGroups, imports := gather(info, key)
+			sb.WriteString(key.String())
+			for _, imp := range sortSet(imports) {
+				sb.WriteString(fmt.Sprintf("\t%s\n", imp))
+			}
+			for i := range outGroups {
+				sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
+				out := make(map[string]token.Pos, outGroups[i].outputs.Len())
+				outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
+					switch v := v.(type) {
+					case *wire.Provider:
+						out[types.TypeString(t, nil)] = v.Pos
+					case *wire.Value:
+						out[types.TypeString(t, nil)] = v.Pos
+					case *wire.Field:
+						out[types.TypeString(t, nil)] = v.Pos
+					default:
+						panic("unreachable")
+					}
+				})
+				for _, t := range sortSet(out) {
+					sb.WriteString(fmt.Sprintf("\t\t%s\n", t))
+					sb.WriteString(fmt.Sprintf("\t\t\tat %v\n", info.Fset.Position(out[t])))
 				}
-			})
-			for _, t := range sortSet(out) {
-				sb.WriteString(fmt.Sprintf("\t\t%s\n", t))
-				sb.WriteString(fmt.Sprintf("\t\t\tat %v\n", info.Fset.Position(out[t])))
 			}
-		}
-	case len(info.Injectors) == 1:
-		injectors := append([]*wire.Injector(nil), info.Injectors...)
-		sort.Slice(injectors, func(i, j int) bool {
-			if injectors[i].ImportPath == injectors[j].ImportPath {
-				return injectors[i].FuncName < injectors[j].FuncName
-			}
-			return injectors[i].ImportPath < injectors[j].ImportPath
-		})
-		sb.WriteString(fmt.Sprintln("\nInjectors:"))
-		for _, in := range injectors {
-			sb.WriteString(fmt.Sprintf("\t%v\n", in))
+			break
 		}
 	}
-	res := &lsp.HoverResponse{
-		Jsonrpc: "2.0",
-		Id:      req.Id,
-		Result: lsp.HoverResult{
-			Contents: lsp.MarkupContent{
-				Kind:  "plaintext",
-				Value: sb.String(),
-			},
+	res.Result = &lsp.HoverResult{
+		Contents: lsp.MarkupContent{
+			Kind:  "plaintext",
+			Value: sb.String(),
 		},
 	}
 	return res
+}
+
+func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, event *lsp.DidSaveTextDocumentNotification) (*lsp.PublishDiagnosticsNotification, bool) {
+	url, err := url.Parse(event.Params.TextDocument.Uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+		return nil, false
+	}
+	wd := filepath.Dir(url.Path)
+	pattern := []string{"."}
+	_, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
+	var diags []lsp.Diagnostic
+	for _, err := range errs {
+		wErr := err.(*wire.WireErr)
+		line := wErr.Position().Line - 1
+		char := wErr.Position().Column - 1
+		diags = append(diags, lsp.Diagnostic{
+			Range: lsp.Range{
+				Start: lsp.Position{
+					Line:      line,
+					Character: char,
+				},
+				End: lsp.Position{
+					Line:      line + 1,
+					Character: 0,
+				},
+			},
+			Message: wErr.Message(),
+		})
+	}
+	notif := &lsp.PublishDiagnosticsNotification{
+		Jsonrpc: "2.0",
+		Method:  "textDocument/publishDiagnostics",
+		Params: lsp.PublishDiagnosticsParams{
+			Uri:         event.Params.TextDocument.Uri,
+			Diagnostics: diags,
+		},
+	}
+	return notif, true
 }

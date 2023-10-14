@@ -59,7 +59,7 @@ func ReadBuffer(reader *bufio.Reader) ([]byte, bool) {
 func ParseMessage(buf []byte) (map[string]interface{}, bool) {
 	in := make(map[string]interface{})
 	if err := json.Unmarshal(buf, &in); err != nil {
-		fmt.Fprintf(os.Stderr, "error deserializing request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error deserializing message: %v\n", err)
 		return nil, false
 	}
 	return in, true
@@ -67,16 +67,16 @@ func ParseMessage(buf []byte) (map[string]interface{}, bool) {
 
 func ParseRequest(buf []byte, req interface{}) bool {
 	if err := json.Unmarshal(buf, req); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error deserializing request (or notification): %v\n", err)
 		return false
 	}
 	return true
 }
 
-func StringifyResponse(res interface{}) bool {
+func SendMessage(res interface{}) bool {
 	bytes, err := json.Marshal(res)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error serializing response: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error serializing message: %v\n", err)
 		return false
 	}
 	fmt.Printf("Content-Length: %d\r\n", len(bytes))

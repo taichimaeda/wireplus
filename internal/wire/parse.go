@@ -302,7 +302,7 @@ func Load(ctx context.Context, wd string, env []string, tags string, patterns []
 				sig := pkg.TypesInfo.ObjectOf(fn.Name).Type().(*types.Signature)
 				ins, out, err := injectorFuncSignature(sig)
 				if err != nil {
-					if w, ok := err.(*wireErr); ok {
+					if w, ok := err.(*WireErr); ok {
 						ec.add(notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error)))
 					} else {
 						ec.add(notePosition(fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, err)))
@@ -322,7 +322,7 @@ func Load(ctx context.Context, wd string, env []string, tags string, patterns []
 				_, errs = solve(fset, out.out, ins, set)
 				if len(errs) > 0 {
 					ec.add(mapErrors(errs, func(e error) error {
-						if w, ok := e.(*wireErr); ok {
+						if w, ok := e.(*WireErr); ok {
 							return notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error))
 						}
 						return notePosition(fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, e))
@@ -330,6 +330,7 @@ func Load(ctx context.Context, wd string, env []string, tags string, patterns []
 					continue
 				}
 				info.Injectors = append(info.Injectors, &Injector{
+					Pos:        fn.Pos(),
 					ImportPath: pkg.PkgPath,
 					FuncName:   fn.Name.Name,
 				})
@@ -406,6 +407,7 @@ func (id ProviderSetID) String() string {
 
 // An Injector describes an injector function.
 type Injector struct {
+	Pos        token.Pos
 	ImportPath string
 	FuncName   string
 }

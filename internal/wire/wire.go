@@ -163,7 +163,7 @@ func generateInjectors(g *gen, pkg *packages.Package) (injectorFiles []*ast.File
 			sig := pkg.TypesInfo.ObjectOf(fn.Name).Type().(*types.Signature)
 			ins, _, err := injectorFuncSignature(sig)
 			if err != nil {
-				if w, ok := err.(*wireErr); ok {
+				if w, ok := err.(*WireErr); ok {
 					ec.add(notePosition(w.position, fmt.Errorf("inject %s: %v", fn.Name.Name, w.error)))
 				} else {
 					ec.add(notePosition(g.pkg.Fset.Position(fn.Pos()), fmt.Errorf("inject %s: %v", fn.Name.Name, err)))
@@ -318,7 +318,7 @@ func (g *gen) inject(pos token.Pos, name string, sig *types.Signature, set *Prov
 	calls, errs := solve(g.pkg.Fset, injectSig.out, params, set)
 	if len(errs) > 0 {
 		return mapErrors(errs, func(e error) error {
-			if w, ok := e.(*wireErr); ok {
+			if w, ok := e.(*WireErr); ok {
 				return notePosition(w.position, fmt.Errorf("inject %s: %v", name, w.error))
 			}
 			return notePosition(g.pkg.Fset.Position(pos), fmt.Errorf("inject %s: %v", name, e))

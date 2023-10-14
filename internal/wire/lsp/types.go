@@ -1,5 +1,24 @@
 package lsp
 
+type Position struct {
+	Line      int `json:"line"`
+	Character int `json:"character"`
+}
+
+type Range struct {
+	Start Position `json:"start"`
+	End   Position `json:"end"`
+}
+
+type TextDocumentIdentifier struct {
+	Uri string `json:"uri"`
+}
+
+type MarkupContent struct {
+	Kind  string `json:"kind"`
+	Value string `json:"value"`
+}
+
 type InitializeRequest struct {
 	Jsonrpc string           `json:"jsonrpc"`
 	Id      int              `json:"id"`
@@ -21,9 +40,9 @@ type WorkspaceClientCapabilities struct {
 }
 
 type InitializeResponse struct {
-	Jsonrpc string           `json:"jsonrpc"`
-	Id      int              `json:"id"`
-	Result  InitializeResult `json:"result"`
+	Jsonrpc string            `json:"jsonrpc"`
+	Id      int               `json:"id"`
+	Result  *InitializeResult `json:"result"`
 }
 type InitializeResult struct {
 	Capabilities ServerCapabilities `json:"capabilities"`
@@ -55,26 +74,38 @@ type HoverParams struct {
 	Position     Position               `json:"position"`
 }
 
-type TextDocumentIdentifier struct {
-	Uri string `json:"uri"`
-}
-
-type Position struct {
-	Line      int `json:"line"`
-	Character int `json:"character"`
-}
-
 type HoverResponse struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Id      int         `json:"id"`
-	Result  HoverResult `json:"result"`
+	Jsonrpc string       `json:"jsonrpc"`
+	Id      int          `json:"id"`
+	Result  *HoverResult `json:"result"`
 }
 
 type HoverResult struct {
 	Contents MarkupContent `json:"contents"`
 }
 
-type MarkupContent struct {
-	Kind  string `json:"kind"`
-	Value string `json:"value"`
+type DidSaveTextDocumentNotification struct {
+	Jsonrpc string                    `json:"jsonrpc"`
+	Method  string                    `json:"method"`
+	Params  DidSaveTextDocumentParams `json:"params"`
+}
+
+type DidSaveTextDocumentParams struct {
+	TextDocument TextDocumentIdentifier `json:"textDocument"`
+}
+
+type PublishDiagnosticsNotification struct {
+	Jsonrpc string                   `json:"jsonrpc"`
+	Method  string                   `json:"method"`
+	Params  PublishDiagnosticsParams `json:"params"`
+}
+
+type PublishDiagnosticsParams struct {
+	Uri         string       `json:"uri"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+type Diagnostic struct {
+	Range   Range  `json:"range"`
+	Message string `json:"message"`
 }
