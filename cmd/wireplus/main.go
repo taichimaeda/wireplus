@@ -18,6 +18,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -28,6 +29,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"sort"
@@ -37,6 +39,7 @@ import (
 	"github.com/google/subcommands"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/taichimaeda/wireplus/internal/wire"
+	"github.com/taichimaeda/wireplus/internal/wire/lsp"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -49,6 +52,7 @@ func main() {
 	subcommands.Register(&genCmd{}, "")
 	subcommands.Register(&showCmd{}, "")
 	subcommands.Register(&graphCmd{}, "")
+	subcommands.Register(&lspCmd{}, "")
 	flag.Parse()
 
 	// Initialize the default logger to log to stderr.
@@ -69,6 +73,7 @@ func main() {
 		"gen":      true,
 		"show":     true,
 		"graph":    true,
+		"lsp":      true,
 	}
 	// Default to running the "gen" command.
 	if args := flag.Args(); len(args) == 0 || !allCmds[args[0]] {
@@ -624,8 +629,7 @@ func (*graphCmd) Synopsis() string {
 func (*graphCmd) Usage() string {
 	return `graph [package] [injector]
 
-  Given an injector function in the specified package, graph visualizes the dependency grah of the providers
-  by generating a graphviz dot file and displaying it in a browser.
+  Given a package and injector, graph visualizes the dependencies of providers using Graphviz.
 `
 }
 func (cmd *graphCmd) SetFlags(f *flag.FlagSet) {
@@ -679,4 +683,177 @@ func openUrlInBrowser(url string) error {
 		err = fmt.Errorf("unsupported platform")
 	}
 	return err
+}
+
+type lspCmd struct {
+	tags string
+}
+
+func (*lspCmd) Name() string { return "lsp" }
+func (*lspCmd) Synopsis() string {
+	return "lsp starts interactive language server"
+}
+func (*lspCmd) Usage() string {
+	return `lsp
+
+  lsp starts an interactive language server that exchanges data in JSON.
+`
+}
+func (cmd *lspCmd) SetFlags(f *flag.FlagSet) {
+	f.StringVar(&cmd.tags, "tags", "", "append build tags to the default wirebuild")
+}
+func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interface{}) subcommands.ExitStatus {
+	if len(f.Args()) != 0 {
+		log.Println("lsp takes no arguments")
+		return subcommands.ExitFailure
+	}
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		buf, ok := lsp.ReadBuffer(reader)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "failed to read buffer")
+			continue
+		}
+		msg, ok := lsp.ParseMessage(buf)
+		if !ok {
+			fmt.Fprintln(os.Stderr, "failed to parse message")
+			continue
+		}
+		method, ok := msg["method"]
+		if !ok {
+			fmt.Fprintln(os.Stderr, "message does not specify method")
+			continue
+		}
+		if _, ok := msg["id"]; !ok {
+			// Notification received
+			switch method {
+			case "initialized":
+				fmt.Fprintln(os.Stderr, "initialized")
+			default:
+				fmt.Fprintf(os.Stderr, "received notification: %v\n", string(buf))
+			}
+		} else {
+			switch method {
+			case "initialize":
+				req := &lsp.InitializeRequest{}
+				if ok := lsp.ParseRequest(buf, req); !ok {
+					continue
+				}
+				res := cmd.handleInitializeRequest(req)
+				lsp.StringifyResponse(res)
+			case "textDocument/hover":
+				req := &lsp.HoverRequest{}
+				if ok := lsp.ParseRequest(buf, req); !ok {
+					continue
+				}
+				res := cmd.handleHoverRequest(ctx, req)
+				lsp.StringifyResponse((res))
+			case "textDocument/codelens":
+			case "textDocument/jump":
+			case "textDocument/diagnostics":
+			default:
+				fmt.Fprintf(os.Stderr, "invalid method: %v\n", method)
+			}
+		}
+	}
+}
+
+func (cmd *lspCmd) handleInitializeRequest(req *lsp.InitializeRequest) *lsp.InitializeResponse {
+	// configCap := req.Params.Capabilities.Workspace.Configuration
+	workspaceConfigCap := req.Params.Capabilities.Workspace.WorkspaceFolders
+	res := &lsp.InitializeResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result: lsp.InitializeResult{
+			Capabilities: lsp.ServerCapabilities{
+				TextDocumentSync: 2, // 2: Incremental
+				HoverProvider:    true,
+			},
+		},
+	}
+	if workspaceConfigCap {
+		res.Result.Capabilities.Workspace.WorkspaceFolders.Supported = true
+	}
+	return res
+}
+
+func (cmd *lspCmd) handleHoverRequest(ctx context.Context, req *lsp.HoverRequest) *lsp.HoverResponse {
+	url, err := url.Parse(req.Params.TextDocument.Uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+		return nil
+	}
+	wd := filepath.Dir(url.Path)
+	pattern := []string{"."}
+	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
+	if len(errs) > 0 {
+		for _, err := range errs {
+			fmt.Fprint(os.Stderr, err.Error())
+		}
+		return nil
+	}
+	if info == nil {
+		return nil
+	}
+	var key wire.ProviderSetID
+	for k, set := range info.Sets {
+		file := info.Fset.File(set.Pos)
+		line := info.Fset.Position(set.Pos).Line
+		// file.Name actually returns an absolute path in this case.
+		if file.Name() == url.Path && line == req.Params.Position.Line {
+			key = k
+		}
+	}
+	var sb strings.Builder
+	switch {
+	case key != wire.ProviderSetID{}:
+		outGroups, imports := gather(info, key)
+		sb.WriteString(key.String())
+		for _, imp := range sortSet(imports) {
+			sb.WriteString(fmt.Sprintf("\t%s\n", imp))
+		}
+		for i := range outGroups {
+			sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
+			out := make(map[string]token.Pos, outGroups[i].outputs.Len())
+			outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
+				switch v := v.(type) {
+				case *wire.Provider:
+					out[types.TypeString(t, nil)] = v.Pos
+				case *wire.Value:
+					out[types.TypeString(t, nil)] = v.Pos
+				case *wire.Field:
+					out[types.TypeString(t, nil)] = v.Pos
+				default:
+					panic("unreachable")
+				}
+			})
+			for _, t := range sortSet(out) {
+				sb.WriteString(fmt.Sprintf("\t\t%s\n", t))
+				sb.WriteString(fmt.Sprintf("\t\t\tat %v\n", info.Fset.Position(out[t])))
+			}
+		}
+	case len(info.Injectors) == 1:
+		injectors := append([]*wire.Injector(nil), info.Injectors...)
+		sort.Slice(injectors, func(i, j int) bool {
+			if injectors[i].ImportPath == injectors[j].ImportPath {
+				return injectors[i].FuncName < injectors[j].FuncName
+			}
+			return injectors[i].ImportPath < injectors[j].ImportPath
+		})
+		sb.WriteString(fmt.Sprintln("\nInjectors:"))
+		for _, in := range injectors {
+			sb.WriteString(fmt.Sprintf("\t%v\n", in))
+		}
+	}
+	res := &lsp.HoverResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result: lsp.HoverResult{
+			Contents: lsp.MarkupContent{
+				Kind:  "plaintext",
+				Value: sb.String(),
+			},
+		},
+	}
+	return res
 }
