@@ -14,15 +14,15 @@ import (
 
 type Graphviz = gographviz.Escape
 
-// pattern is the pattern of the target package.
+// pattern is the pattern of the target package (must be a singleton).
 // name is the name of the function calling wire.Build.
-func Graph(ctx context.Context, wd string, env []string, pattern string, name string, tags string) (*Graphviz, []error) {
+func Graph(ctx context.Context, wd string, env []string, pattern []string, name string, tags string) (*Graphviz, []error) {
 	// Create new gviz with escape
 	gviz := gographviz.NewEscape()
 	gviz.SetName("cluster-all")
 	gviz.SetDir(true)
 
-	pkgs, errs := LoadPackages(ctx, wd, env, tags, []string{pattern})
+	pkgs, errs := LoadPackages(ctx, wd, env, tags, pattern)
 	if len(errs) > 0 {
 		return nil, errs
 	}

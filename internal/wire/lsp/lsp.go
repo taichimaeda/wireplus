@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/token"
 	"io"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -84,6 +85,25 @@ func SendMessage(res interface{}) bool {
 	fmt.Printf("\r\n")
 	fmt.Print(string(bytes))
 	return true
+}
+
+func SendError(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, format+"\r\n", args...)
+}
+
+func SendErrors(errs []error) {
+	for _, err := range errs {
+		SendError("%v", err.Error())
+	}
+}
+
+func ParseDocumentUri(uri string) *url.URL {
+	url, err := url.Parse(uri)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+		return nil
+	}
+	return url
 }
 
 func CalculatePos(fset *token.FileSet, path string, line int, char int) token.Pos {

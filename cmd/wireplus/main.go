@@ -53,6 +53,7 @@ func main() {
 	subcommands.Register(&diffCmd{}, "")
 	subcommands.Register(&genCmd{}, "")
 	subcommands.Register(&showCmd{}, "")
+	subcommands.Register(&detailCmd{}, "")
 	subcommands.Register(&graphCmd{}, "")
 	subcommands.Register(&lspCmd{}, "")
 	flag.Parse()
@@ -74,6 +75,7 @@ func main() {
 		"diff":     true,
 		"gen":      true,
 		"show":     true,
+		"detail":   true,
 		"graph":    true,
 		"lsp":      true,
 	}
@@ -620,6 +622,77 @@ func logErrors(errs []error) {
 	}
 }
 
+type detailCmd struct {
+	tags string
+}
+
+func (*detailCmd) Name() string { return "detail" }
+func (*detailCmd) Synopsis() string {
+	return "describe a single top-level provider set"
+}
+func (*detailCmd) Usage() string {
+	return `detail [package] [name]
+
+  detail is essentially equivalent to show but you can specify the name
+`
+}
+func (cmd *detailCmd) SetFlags(f *flag.FlagSet) {
+	f.StringVar(&cmd.tags, "tags", "", "append build tags to the default wirebuild")
+}
+func (cmd *detailCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interface{}) subcommands.ExitStatus {
+	wd, err := os.Getwd()
+	if err != nil {
+		log.Println("failed to get working directory: ", err)
+		return subcommands.ExitFailure
+	}
+	if len(f.Args()) != 2 {
+		log.Println("detail requires two arguments: package and name")
+		return subcommands.ExitFailure
+	}
+	pattern := []string{f.Args()[0]}
+	name := f.Args()[1]
+	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
+	if len(errs) > 0 {
+		logErrors(errs)
+		return subcommands.ExitFailure
+	}
+	var sb strings.Builder
+	for k, set := range info.Sets {
+		if set.VarName != name {
+			continue
+		}
+		outGroups, imports := gather(info, k)
+		sb.WriteString(k.String())
+		for _, imp := range sortSet(imports) {
+			sb.WriteString(fmt.Sprintf("\t%s\n", imp))
+		}
+		for i := range outGroups {
+			sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
+			out := make(map[string]token.Pos, outGroups[i].outputs.Len())
+			outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
+				switch v := v.(type) {
+				case *wire.Provider:
+					out[types.TypeString(t, nil)] = v.Pos
+				case *wire.Value:
+					out[types.TypeString(t, nil)] = v.Pos
+				case *wire.Field:
+					out[types.TypeString(t, nil)] = v.Pos
+				default:
+					panic("unreachable")
+				}
+			})
+			for _, t := range sortSet(out) {
+				sb.WriteString(fmt.Sprintf("\t\t%s\n", t))
+				sb.WriteString(fmt.Sprintf("\t\t\tat %v\n", info.Fset.Position(out[t])))
+			}
+		}
+		// Print data to stdout as output
+		fmt.Println(sb.String())
+		return subcommands.ExitSuccess
+	}
+	return subcommands.ExitFailure
+}
+
 type graphCmd struct {
 	tags    string
 	browser bool
@@ -630,9 +703,9 @@ func (*graphCmd) Synopsis() string {
 	return "visualize providers as graph using grpahviz"
 }
 func (*graphCmd) Usage() string {
-	return `graph [package] [injector]
+	return `graph [package] [name]
 
-  Given a package and injector, graph visualizes the dependencies of providers using Graphviz.
+  Given a package and name, graph visualizes the dependencies of providers using Graphviz.
 `
 }
 func (cmd *graphCmd) SetFlags(f *flag.FlagSet) {
@@ -646,11 +719,10 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 		return subcommands.ExitFailure
 	}
 	if len(f.Args()) != 2 {
-		log.Println("graph requires two arguments: package and injector")
+		log.Println("graph requires two arguments: package and name")
 		return subcommands.ExitFailure
 	}
-	// TODO: pattern
-	pattern := f.Args()[0]
+	pattern := []string{f.Args()[0]}
 	name := f.Args()[1]
 	gviz, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
 	if len(errs) > 0 {
@@ -674,6 +746,7 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 func showGraphInBrowser(gviz *wire.Graphviz) error {
 	data := gviz.String()
 	dot := strings.Replace(url.QueryEscape(data), "+", "%20", -1)
+	// TODO: Make this customisable
 	url := "https://edotor.net/#" + dot
 	switch runtime.GOOS {
 	case "linux":
@@ -713,22 +786,22 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 	for {
 		buf, ok := lsp.ReadBuffer(reader)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "failed to read buffer")
+			lsp.SendError("failed to read buffer")
 			continue
 		}
 		msg, ok := lsp.ParseMessage(buf)
 		if !ok {
-			fmt.Fprintln(os.Stderr, "failed to parse message")
+			lsp.SendError("failed to parse message")
 			continue
 		}
 		method, ok := msg["method"]
 		if !ok {
-			fmt.Fprintln(os.Stderr, "message does not specify method")
+			lsp.SendError("message does not specify method")
 			continue
 		}
 		if _, ok := msg["id"]; !ok {
 			// Notification received
-			fmt.Fprintf(os.Stderr, "received notification: %v\n", string(buf))
+			lsp.SendError("received notification: %v\n", string(buf))
 			switch method {
 			case "initialized":
 			case "exit":
@@ -743,7 +816,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 					lsp.SendMessage(notif)
 				}
 			default:
-				fmt.Fprintf(os.Stderr, "invalid notification: %v\n", string(buf))
+				lsp.SendError("invalid notification: %v\n", string(buf))
 			}
 		} else {
 			switch method {
@@ -761,13 +834,6 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				}
 				res := cmd.processShutdownRequest(req)
 				lsp.SendMessage(res)
-			case "textDocument/hover":
-				req := &lsp.HoverRequest{}
-				if ok := lsp.ParseRequest(buf, req); !ok {
-					continue
-				}
-				res := cmd.processHoverRequest(ctx, req)
-				lsp.SendMessage(res)
 			case "textDocument/codeLens":
 				req := &lsp.CodeLensRequest{}
 				if ok := lsp.ParseRequest(buf, req); !ok {
@@ -783,7 +849,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				res := cmd.processDefinitionRequest(ctx, req)
 				lsp.SendMessage(res)
 			default:
-				fmt.Fprintf(os.Stderr, "invalid method: %v\n", method)
+				lsp.SendError("invalid method: %v\n", method)
 			}
 		}
 	}
@@ -796,7 +862,6 @@ func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.Ini
 		Result: &lsp.InitializeResult{
 			Capabilities: lsp.ServerCapabilities{
 				TextDocumentSync:   2, // 2: Incremental
-				HoverProvider:      true,
 				CodeLensProvider:   true,
 				DefinitionProvider: true,
 			},
@@ -821,94 +886,25 @@ func (cmd *lspCmd) processShutdownRequest(req *lsp.ShutdownRequest) *lsp.Shutdow
 	return res
 }
 
-func (cmd *lspCmd) processHoverRequest(ctx context.Context, req *lsp.HoverRequest) *lsp.HoverResponse {
-	res := &lsp.HoverResponse{
-		Jsonrpc: "2.0",
-		Id:      req.Id,
-		Result:  nil,
-	}
-	url, err := url.Parse(req.Params.TextDocument.Uri)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
-		return res
-	}
-	wd := filepath.Dir(url.Path)
-	pattern := []string{"."}
-	// TODO: Load is simple but can be made more efficient by providing file path
-	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
-	if len(errs) > 0 {
-		for _, err := range errs {
-			fmt.Fprintln(os.Stderr, err.Error())
-		}
-		return res
-	}
-	if info == nil {
-		return res
-	}
-	// Search for wire.NewSet at the given pos.
-	var sb strings.Builder
-	for key, set := range info.Sets {
-		file := info.Fset.File(set.Pos)
-		line := info.Fset.Position(set.Pos).Line - 1
-		// file.Name actually returns an absolute path in this case.
-		if file.Name() == url.Path && line == req.Params.Position.Line {
-			outGroups, imports := gather(info, key)
-			sb.WriteString(key.String())
-			for _, imp := range sortSet(imports) {
-				sb.WriteString(fmt.Sprintf("\t%s\n", imp))
-			}
-			for i := range outGroups {
-				sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
-				out := make(map[string]token.Pos, outGroups[i].outputs.Len())
-				outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
-					switch v := v.(type) {
-					case *wire.Provider:
-						out[types.TypeString(t, nil)] = v.Pos
-					case *wire.Value:
-						out[types.TypeString(t, nil)] = v.Pos
-					case *wire.Field:
-						out[types.TypeString(t, nil)] = v.Pos
-					default:
-						panic("unreachable")
-					}
-				})
-				for _, t := range sortSet(out) {
-					sb.WriteString(fmt.Sprintf("\t\t%s\n", t))
-					sb.WriteString(fmt.Sprintf("\t\t\tat %v\n", info.Fset.Position(out[t])))
-				}
-			}
-			break
-		}
-	}
-	res.Result = &lsp.Hover{
-		Contents: lsp.MarkupContent{
-			Kind:  "plaintext",
-			Value: sb.String(),
-		},
-	}
-	return res
-}
-
 func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest) *lsp.DefinitionResponse {
 	res := &lsp.DefinitionResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
 		Result:  nil,
 	}
-	url, err := url.Parse(req.Params.TextDocument.Uri)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+	url := lsp.ParseDocumentUri(req.Params.TextDocument.Uri)
+	if url == nil {
 		return res
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
 	pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
 	if len(errs) > 0 {
-		fmt.Fprintf(os.Stderr, "")
+		lsp.SendErrors(errs)
 		return res
 	}
 	if len(pkgs) != 1 {
-		fmt.Fprintf(os.Stderr, "")
+		lsp.SendError("")
 		return res
 	}
 	pkg := pkgs[0]
@@ -920,7 +916,7 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 		}
 		path, ok := astutil.PathEnclosingInterval(f, pos, pos)
 		if !ok {
-			fmt.Fprintf(os.Stderr, "")
+			lsp.SendError("")
 			return res
 		}
 		node := path[0]
@@ -930,11 +926,11 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 			pattern := []string{obj.Pkg().Path()}
 			pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
 			if len(errs) > 0 {
-				fmt.Fprintf(os.Stderr, "")
+				lsp.SendError("")
 				return res
 			}
 			if len(pkgs) != 1 {
-				fmt.Fprintf(os.Stderr, "")
+				lsp.SendError("")
 				return res
 			}
 			pkg := pkgs[0]
@@ -960,10 +956,82 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 	return res
 }
 
+func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest) *lsp.CodeLensResponse {
+	res := &lsp.CodeLensResponse{
+		Jsonrpc: "2.0",
+		Id:      req.Id,
+		Result:  nil,
+	}
+	url := lsp.ParseDocumentUri(req.Params.TextDocument.Uri)
+	if url == nil {
+		return res
+	}
+	wd := filepath.Dir(url.Path)
+	pattern := []string{"."}
+	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
+	if len(errs) > 0 {
+		lsp.SendErrors(errs)
+		return res
+	}
+	if info == nil {
+		return res
+	}
+	var codeLenses []lsp.CodeLens
+	for _, inj := range info.Injectors {
+		codeLenses = append(codeLenses, makeCodeLens(
+			info,
+			inj.Pos,
+			"Show Graph",
+			"exampleExtension.showGraph",
+			[]interface{}{wd, inj.FuncName}),
+		)
+	}
+	for _, set := range info.Sets {
+		codeLenses = append(codeLenses, makeCodeLens(
+			info,
+			set.Pos,
+			"Show Graph",
+			"exampleExtension.showGraph",
+			[]interface{}{wd, set.VarName}),
+		)
+		codeLenses = append(codeLenses, makeCodeLens(
+			info,
+			set.Pos,
+			"Show Details",
+			"exampleExtension.showDetail",
+			[]interface{}{wd, set.VarName}),
+		)
+	}
+	res.Result = codeLenses
+	return res
+}
+
+func makeCodeLens(info *wire.Info, pos token.Pos, title string, cmd string, args []interface{}) lsp.CodeLens {
+	position := info.Fset.Position(pos)
+	line := position.Line - 1
+	char := position.Column - 1
+	return lsp.CodeLens{
+		Range: lsp.Range{
+			Start: lsp.Position{
+				Line:      line,
+				Character: char,
+			},
+			End: lsp.Position{
+				Line:      line,
+				Character: char,
+			},
+		},
+		Command: lsp.Command{
+			Title:     "Show Graph",
+			Command:   "exampleExtension.showGraph",
+			Arguments: args,
+		},
+	}
+}
+
 func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, event *lsp.DidSaveTextDocumentNotification) (*lsp.PublishDiagnosticsNotification, bool) {
-	url, err := url.Parse(event.Params.TextDocument.Uri)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
+	url := lsp.ParseDocumentUri(event.Params.TextDocument.Uri)
+	if url == nil {
 		return nil, false
 	}
 	wd := filepath.Dir(url.Path)
@@ -1003,75 +1071,4 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 		},
 	}
 	return notif, true
-}
-
-func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest) *lsp.CodeLensResponse {
-	res := &lsp.CodeLensResponse{
-		Jsonrpc: "2.0",
-		Id:      req.Id,
-		Result:  nil,
-	}
-	url, err := url.Parse(req.Params.TextDocument.Uri)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to parse document uri: %v\n", url)
-		return res
-	}
-	wd := filepath.Dir(url.Path)
-	pattern := []string{"."}
-	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
-	if len(errs) > 0 {
-		for _, err := range errs {
-			fmt.Fprintln(os.Stderr, err.Error())
-		}
-		return res
-	}
-	if info == nil {
-		return res
-	}
-	type item struct {
-		pos  token.Pos
-		name string
-	}
-	var items []item
-	for _, inj := range info.Injectors {
-		items = append(items, item{
-			pos:  inj.Pos,
-			name: inj.FuncName,
-		})
-	}
-	for _, set := range info.Sets {
-		items = append(items, item{
-			pos:  set.Pos,
-			name: set.VarName,
-		})
-	}
-	var codeLenses []lsp.CodeLens
-	for _, item := range items {
-		file := info.Fset.File(item.pos)
-		if file.Name() != url.Path {
-			continue
-		}
-		position := info.Fset.Position(item.pos)
-		line := position.Line - 1
-		char := position.Column - 1
-		codeLenses = append(codeLenses, lsp.CodeLens{
-			Range: lsp.Range{
-				Start: lsp.Position{
-					Line:      line,
-					Character: char,
-				},
-				End: lsp.Position{
-					Line:      line,
-					Character: char,
-				},
-			},
-			Command: lsp.Command{
-				Title:     "Show Graph",
-				Command:   "exampleExtension.showGraph",
-				Arguments: []interface{}{wd, item.name},
-			},
-		})
-	}
-	res.Result = codeLenses
-	return res
 }

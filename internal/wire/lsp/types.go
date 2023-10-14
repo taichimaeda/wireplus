@@ -61,7 +61,6 @@ type InitializeResult struct {
 
 type ServerCapabilities struct {
 	TextDocumentSync   int                         `json:"textDocumentSync"`
-	HoverProvider      bool                        `json:"hoverProvider"`
 	CodeLensProvider   bool                        `json:"codeLensProvider"`
 	DefinitionProvider bool                        `json:"definition"`
 	Workspace          WorkspaceServerCapabilities `json:"workspace"`
@@ -102,28 +101,6 @@ type DefinitionResponse struct {
 	Jsonrpc string    `json:"jsonrpc"`
 	Id      int       `json:"id"`
 	Result  *Location `json:"result"`
-}
-
-type HoverRequest struct {
-	Jsonrpc string      `json:"jsonrpc"`
-	Id      int         `json:"id"`
-	Method  string      `json:"method"`
-	Params  HoverParams `json:"Params"`
-}
-
-type HoverParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
-}
-
-type HoverResponse struct {
-	Jsonrpc string `json:"jsonrpc"`
-	Id      int    `json:"id"`
-	Result  *Hover `json:"result"`
-}
-
-type Hover struct {
-	Contents MarkupContent `json:"contents"`
 }
 
 type CodeLensRequest struct {
