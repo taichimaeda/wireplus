@@ -786,8 +786,10 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 
 	resCh := make(chan interface{})
 	go func() {
-		res := <-resCh
-		lsp.SendMessage(res)
+		for {
+			res := <-resCh
+			lsp.SendMessage(res)
+		}
 	}()
 
 	reader := bufio.NewReader(os.Stdin)
