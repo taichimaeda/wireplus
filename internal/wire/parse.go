@@ -1147,6 +1147,40 @@ func findInjectorNewSet(info *types.Info, expr *ast.Expr) (*ast.CallExpr, error)
 	return call, nil
 }
 
+func findFuncDecl(pkg *packages.Package, name string) *ast.FuncDecl {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			if fn, ok := decl.(*ast.FuncDecl); ok {
+				if fn.Name.Name == name {
+					return fn
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// TODO: can be replaced by types.Scope
+func findVarExpr(pkg *packages.Package, name string) *ast.Expr {
+	for _, f := range pkg.Syntax {
+		for _, decl := range f.Decls {
+			// Matching against top-level variable declaration with the given name.
+			if gDecl, ok := decl.(*ast.GenDecl); ok && gDecl.Tok == token.VAR {
+				for _, spec := range gDecl.Specs {
+					if vSpec, ok := spec.(*ast.ValueSpec); ok {
+						for i, ident := range vSpec.Names {
+							if ident.Name == name {
+								return &vSpec.Values[i]
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func isWireImport(path string) bool {
 	// TODO(light): This is depending on details of the current loader.
 	const vendorPart = "vendor/"
@@ -1258,38 +1292,4 @@ func bindShouldUsePointer(info *types.Info, call *ast.CallExpr) bool {
 	pkgName := fun.X.(*ast.Ident)                       // wire
 	wireName := info.ObjectOf(pkgName).(*types.PkgName) // wire package
 	return wireName.Imported().Scope().Lookup("bindToUsePointer") != nil
-}
-
-func findFuncDeclByName(pkg *packages.Package, name string) *ast.FuncDecl {
-	for _, f := range pkg.Syntax {
-		for _, decl := range f.Decls {
-			if fn, ok := decl.(*ast.FuncDecl); ok {
-				if fn.Name.Name == name {
-					return fn
-				}
-			}
-		}
-	}
-	return nil
-}
-
-// TODO: can be replaced by types.Scope
-func findVarExprByName(pkg *packages.Package, name string) *ast.Expr {
-	for _, f := range pkg.Syntax {
-		for _, decl := range f.Decls {
-			// Matching against top-level variable declaration with the given name.
-			if gDecl, ok := decl.(*ast.GenDecl); ok && gDecl.Tok == token.VAR {
-				for _, spec := range gDecl.Specs {
-					if vSpec, ok := spec.(*ast.ValueSpec); ok {
-						for i, ident := range vSpec.Names {
-							if ident.Name == name {
-								return &vSpec.Values[i]
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-	return nil
 }

@@ -633,7 +633,8 @@ func (*detailCmd) Synopsis() string {
 func (*detailCmd) Usage() string {
 	return `detail [package] [name]
 
-  detail is essentially equivalent to show but you can specify the name
+  detail is equivalent to show but only shows a provider set with the given name
+  and does not describe injectors.
 `
 }
 func (cmd *detailCmd) SetFlags(f *flag.FlagSet) {
@@ -667,7 +668,7 @@ func (cmd *detailCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inte
 			sb.WriteString(fmt.Sprintf("\t%s\n", imp))
 		}
 		for i := range outGroups {
-			sb.WriteString(fmt.Sprintf("\tOutputs given %s:\n", outGroups[i].name))
+			sb.WriteString(fmt.Sprintf("\n\tOutputs given %s:\n", outGroups[i].name))
 			out := make(map[string]token.Pos, outGroups[i].outputs.Len())
 			outGroups[i].outputs.Iterate(func(t types.Type, v interface{}) {
 				switch v := v.(type) {
@@ -801,12 +802,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 		}
 		if _, ok := msg["id"]; !ok {
 			// Notification received
+			// TODO: Sending as error for debugging purposes.
 			lsp.SendError("received notification: %v\n", string(buf))
 			switch method {
 			case "initialized":
 			case "exit":
 				return subcommands.ExitFailure
-			// TODO
+			// TODO: Support client with autosave disabled.
 			case "textDocument/didOpen", "textDocument/didSave", "textDocument/didChange":
 				event := &lsp.DidSaveTextDocumentNotification{}
 				if ok := lsp.ParseRequest(buf, event); !ok {
@@ -819,6 +821,8 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				lsp.SendError("invalid notification: %v\n", string(buf))
 			}
 		} else {
+			// TODO: Sending as error for debugging purposes.
+			lsp.SendError("received request: %v\n", string(buf))
 			switch method {
 			case "initialize":
 				req := &lsp.InitializeRequest{}
@@ -904,56 +908,77 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 		return res
 	}
 	if len(pkgs) != 1 {
-		lsp.SendError("")
+		lsp.SendError("expected exactly one package")
 		return res
 	}
 	pkg := pkgs[0]
-	pos := lsp.CalculatePos(pkg.Fset, url.Path, req.Params.Position.Line, req.Params.Position.Character)
-	file := pkg.Fset.Position(pos).Filename
+	line := req.Params.Position.Line
+	char := req.Params.Position.Character
+	pos := lsp.CalculatePos(pkg.Fset, url.Path, line, char)
 	for _, f := range pkg.Syntax {
-		if file != url.Path {
-			continue
-		}
-		path, ok := astutil.PathEnclosingInterval(f, pos, pos)
-		if !ok {
-			lsp.SendError("")
-			return res
-		}
-		node := path[0]
-		if ident, ok := node.(*ast.Ident); ok {
-			obj := pkg.TypesInfo.ObjectOf(ident)
-			wd := pkg.Module.Path
-			pattern := []string{obj.Pkg().Path()}
-			pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
-			if len(errs) > 0 {
-				lsp.SendError("")
+		file := pkg.Fset.File(f.Pos())
+		if base := file.Base(); base <= int(pos) && int(pos) < base+file.Size() {
+			path, ok := astutil.PathEnclosingInterval(f, pos, pos)
+			if !ok {
+				lsp.SendError("invalid position within file")
 				return res
 			}
-			if len(pkgs) != 1 {
-				lsp.SendError("")
+			node := path[0]
+			if ident, ok := node.(*ast.Ident); ok {
+				// TODO: Check this works for packages above the wd
+				tarObj := pkg.TypesInfo.ObjectOf(ident)
+				tarWd, ok := absolutePath(wd, tarObj.Pkg().Path())
+				if !ok {
+					lsp.SendError("unknown import path")
+				}
+				tarPattern := []string{"."}
+				tarPkgs, errs := wire.LoadPackages(ctx, tarWd, os.Environ(), cmd.tags, tarPattern)
+				if len(errs) > 0 {
+					lsp.SendErrors(errs)
+					return res
+				}
+				if len(tarPkgs) != 1 {
+					lsp.SendError("expected exactly one package")
+					return res
+				}
+				tarPkg := tarPkgs[0]
+				// TODO: Somehow jumps to a random position
+				tarPosition := tarPkg.Fset.Position(tarObj.Pos())
+				tarFilename := tarPosition.Filename
+				tarLine := tarPosition.Line
+				tarChar := tarPosition.Column
+				res.Result = &lsp.Location{
+					Uri: tarFilename,
+					Range: lsp.Range{
+						Start: lsp.Position{
+							Line:      tarLine,
+							Character: tarChar,
+						},
+						End: lsp.Position{
+							Line:      tarLine,
+							Character: tarChar,
+						},
+					},
+				}
 				return res
 			}
-			pkg := pkgs[0]
-			position := pkg.Fset.Position(obj.Pos())
-			line := position.Line
-			char := position.Column
-			res.Result = &lsp.Location{
-				Uri: obj.Pkg().Path(),
-				Range: lsp.Range{
-					Start: lsp.Position{
-						Line:      line,
-						Character: char,
-					},
-					End: lsp.Position{
-						Line:      line,
-						Character: char,
-					},
-				},
-			}
-			return res
 		}
 	}
 	return res
+}
+
+func absolutePath(wd string, importPath string) (string, bool) {
+	tmp := "go list -f '{{.ImportPath}}:{{.Dir}}' all | grep "
+	cmd := exec.Command("sh", "-c", tmp+importPath)
+	cmd.Dir = wd
+	stdout, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", false
+	}
+	line := string(stdout)
+	parts := strings.Split(line, ":")
+	absPath := strings.TrimSpace(parts[1])
+	return absPath, true
 }
 
 func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest) *lsp.CodeLensResponse {
@@ -978,27 +1003,35 @@ func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLens
 	}
 	var codeLenses []lsp.CodeLens
 	for _, inj := range info.Injectors {
+		file := info.Fset.File(inj.Pos)
+		if file.Name() != url.Path {
+			continue
+		}
 		codeLenses = append(codeLenses, makeCodeLens(
 			info,
 			inj.Pos,
 			"Show Graph",
-			"exampleExtension.showGraph",
+			"wireplus.showGraph",
 			[]interface{}{wd, inj.FuncName}),
 		)
 	}
 	for _, set := range info.Sets {
+		file := info.Fset.File(set.Pos)
+		if file.Name() != url.Path {
+			continue
+		}
 		codeLenses = append(codeLenses, makeCodeLens(
 			info,
 			set.Pos,
 			"Show Graph",
-			"exampleExtension.showGraph",
+			"wireplus.showGraph",
 			[]interface{}{wd, set.VarName}),
 		)
 		codeLenses = append(codeLenses, makeCodeLens(
 			info,
 			set.Pos,
-			"Show Details",
-			"exampleExtension.showDetail",
+			"Show Detail",
+			"wireplus.showDetail",
 			[]interface{}{wd, set.VarName}),
 		)
 	}
@@ -1022,8 +1055,8 @@ func makeCodeLens(info *wire.Info, pos token.Pos, title string, cmd string, args
 			},
 		},
 		Command: lsp.Command{
-			Title:     "Show Graph",
-			Command:   "exampleExtension.showGraph",
+			Title:     title,
+			Command:   cmd,
 			Arguments: args,
 		},
 	}
@@ -1041,13 +1074,13 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 	// to clear existing diagnostics
 	diags := make([]lsp.Diagnostic, 0)
 	for _, err := range errs {
-		werr := err.(*wire.WireErr)
-		file := werr.Position().Filename
-		if file != url.Path {
+		wireErr := err.(*wire.WireErr)
+		position := wireErr.Position()
+		if position.Filename != url.Path {
 			continue
 		}
-		line := werr.Position().Line - 1
-		char := werr.Position().Column - 1
+		line := wireErr.Position().Line - 1
+		char := wireErr.Position().Column - 1
 		diags = append(diags, lsp.Diagnostic{
 			Range: lsp.Range{
 				Start: lsp.Position{
@@ -1059,7 +1092,7 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 					Character: 0,
 				},
 			},
-			Message: werr.Message(),
+			Message: wireErr.Message(),
 		})
 	}
 	notif := &lsp.PublishDiagnosticsNotification{

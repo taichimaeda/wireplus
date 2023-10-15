@@ -62,7 +62,7 @@ type InitializeResult struct {
 type ServerCapabilities struct {
 	TextDocumentSync   int                         `json:"textDocumentSync"`
 	CodeLensProvider   bool                        `json:"codeLensProvider"`
-	DefinitionProvider bool                        `json:"definition"`
+	DefinitionProvider bool                        `json:"definitionProvider"`
 	Workspace          WorkspaceServerCapabilities `json:"workspace"`
 }
 

@@ -20,11 +20,11 @@ func ReadBuffer(reader *bufio.Reader) ([]byte, bool) {
 			fmt.Fprintf(os.Stderr, "error reading header: %v\n", err)
 			return nil, false
 		}
-		if header == "\r\n" {
-			break
-		}
 		// TODO: trim the remaining \r also
 		header = strings.TrimSpace(header)
+		if header == "" {
+			break
+		}
 		switch {
 		case strings.HasPrefix(header, "Content-Length: "):
 			value := strings.TrimPrefix(header, "Content-Length: ")
@@ -106,6 +106,7 @@ func ParseDocumentUri(uri string) *url.URL {
 	return url
 }
 
+// line and char must be zero-based
 func CalculatePos(fset *token.FileSet, path string, line int, char int) token.Pos {
 	var file *token.File
 	fset.Iterate(func(f *token.File) bool {
@@ -115,7 +116,7 @@ func CalculatePos(fset *token.FileSet, path string, line int, char int) token.Po
 		}
 		return true
 	})
-	offset := int(file.LineStart(line)) - int(file.Base())
-	offset += char
-	return file.Pos(offset)
+	// LineStart accepts one-based line number
+	start := file.LineStart(line + 1)
+	return token.Pos(int(start) + char)
 }

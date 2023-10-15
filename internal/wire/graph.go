@@ -30,30 +30,19 @@ func Graph(ctx context.Context, wd string, env []string, pattern []string, name 
 		return nil, []error{fmt.Errorf("expected exactly one package")}
 	}
 	pkg := pkgs[0]
-	fn := findFuncDeclByName(pkg, name)
-	set := findVarExprByName(pkg, name)
-
-	switch {
-	case set != nil:
-		sol, errs := solveForNewSet(pkg, name)
-		if len(errs) > 0 {
-			return nil, errs
-		}
+	if sol, errs := solveForNewSet(pkg, name); len(errs) == 0 {
 		addInputsForNewSet(gviz, sol.missing)
 		addOutputs(gviz, sol.calls, sol.pset, pkg.Fset)
 		addDepsForNewSet(gviz, sol.calls, sol.missing, pkg.Fset)
-	case fn != nil:
-		sol, errs := solveForBuild(pkg, name)
-		if len(errs) > 0 {
-			return nil, errs
-		}
+		return gviz, nil
+	}
+	if sol, errs := solveForBuild(pkg, name); len(errs) == 0 {
 		addInputsForBuild(gviz, sol.ins)
 		addOutputs(gviz, sol.calls, sol.pset, pkg.Fset)
 		addDepsForBuild(gviz, sol.calls, sol.ins, pkg.Fset)
-	default:
-		return nil, []error{fmt.Errorf("no function or variable named %q found", name)}
+		return gviz, nil
 	}
-	return gviz, nil
+	return nil, errs
 }
 
 func addInputsForNewSet(gviz *Graphviz, missing []*types.Type) {
