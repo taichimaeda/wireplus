@@ -783,6 +783,13 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 		log.Println("lsp takes no arguments")
 		return subcommands.ExitFailure
 	}
+
+	resCh := make(chan interface{})
+	go func() {
+		res := <-resCh
+		lsp.SendMessage(res)
+	}()
+
 	reader := bufio.NewReader(os.Stdin)
 	for {
 		buf, ok := lsp.ReadBuffer(reader)
@@ -806,17 +813,16 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 			lsp.SendError("received notification: %v\n", string(buf))
 			switch method {
 			case "initialized":
+				// Ignore initialized notification.
 			case "exit":
 				return subcommands.ExitFailure
 			// TODO: Support client with autosave disabled.
 			case "textDocument/didOpen", "textDocument/didSave", "textDocument/didChange":
-				event := &lsp.DidSaveTextDocumentNotification{}
-				if ok := lsp.ParseRequest(buf, event); !ok {
+				notif := &lsp.DidSaveTextDocumentNotification{}
+				if ok := lsp.ParseRequest(buf, notif); !ok {
 					continue
 				}
-				if notif, ok := cmd.createPublishDiagnosticsNotification(ctx, event); ok {
-					lsp.SendMessage(notif)
-				}
+				go cmd.handlePublishDiagnosticsNotification(ctx, notif, resCh)
 			default:
 				lsp.SendError("invalid notification: %v\n", string(buf))
 			}
@@ -829,29 +835,25 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.processInitializeRequest(req)
-				lsp.SendMessage(res)
+				go cmd.handleInitializeRequest(req, resCh)
 			case "shutdown":
 				req := &lsp.ShutdownRequest{}
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.processShutdownRequest(req)
-				lsp.SendMessage(res)
+				go cmd.handleShutdownRequest(req, resCh)
 			case "textDocument/codeLens":
 				req := &lsp.CodeLensRequest{}
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.processCodeLensRequest(ctx, req)
-				lsp.SendMessage(res)
+				go cmd.handleCodeLensRequest(ctx, req, resCh)
 			case "textDocument/definition":
 				req := &lsp.DefinitionRequest{}
 				if ok := lsp.ParseRequest(buf, req); !ok {
 					continue
 				}
-				res := cmd.processDefinitionRequest(ctx, req)
-				lsp.SendMessage(res)
+				go cmd.handleDefinitionRequest(ctx, req, resCh)
 			default:
 				lsp.SendError("invalid method: %v\n", method)
 			}
@@ -859,7 +861,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 	}
 }
 
-func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.InitializeResponse {
+func (cmd *lspCmd) handleInitializeRequest(req *lsp.InitializeRequest, resCh chan interface{}) {
 	res := &lsp.InitializeResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
@@ -878,19 +880,19 @@ func (cmd *lspCmd) processInitializeRequest(req *lsp.InitializeRequest) *lsp.Ini
 		wsServerCap := res.Result.Capabilities.Workspace
 		wsServerCap.WorkspaceFolders.Supported = true
 	}
-	return res
+	resCh <- res
 }
 
-func (cmd *lspCmd) processShutdownRequest(req *lsp.ShutdownRequest) *lsp.ShutdownResponse {
+func (cmd *lspCmd) handleShutdownRequest(req *lsp.ShutdownRequest, resCh chan interface{}) {
 	res := &lsp.ShutdownResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
 		Result:  nil,
 	}
-	return res
+	resCh <- res
 }
 
-func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest) *lsp.DefinitionResponse {
+func (cmd *lspCmd) handleDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest, resCh chan interface{}) {
 	res := &lsp.DefinitionResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
@@ -898,18 +900,21 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 	}
 	url := lsp.ParseDocumentUri(req.Params.TextDocument.Uri)
 	if url == nil {
-		return res
+		resCh <- res
+		return
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
 	pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
 	if len(errs) > 0 {
 		lsp.SendErrors(errs)
-		return res
+		resCh <- res
+		return
 	}
 	if len(pkgs) != 1 {
 		lsp.SendError("expected exactly one package")
-		return res
+		resCh <- res
+		return
 	}
 	pkg := pkgs[0]
 	line := req.Params.Position.Line
@@ -921,7 +926,8 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 			path, ok := astutil.PathEnclosingInterval(f, pos, pos)
 			if !ok {
 				lsp.SendError("invalid position within file")
-				return res
+				resCh <- res
+				return
 			}
 			node := path[0]
 			if ident, ok := node.(*ast.Ident); ok {
@@ -930,16 +936,20 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 				tarWd, ok := absolutePath(wd, tarObj.Pkg().Path())
 				if !ok {
 					lsp.SendError("unknown import path")
+					resCh <- res
+					return
 				}
 				tarPattern := []string{"."}
 				tarPkgs, errs := wire.LoadPackages(ctx, tarWd, os.Environ(), cmd.tags, tarPattern)
 				if len(errs) > 0 {
 					lsp.SendErrors(errs)
-					return res
+					resCh <- res
+					return
 				}
 				if len(tarPkgs) != 1 {
 					lsp.SendError("expected exactly one package")
-					return res
+					resCh <- res
+					return
 				}
 				tarPkg := tarPkgs[0]
 				// TODO: Somehow jumps to a random position
@@ -960,11 +970,12 @@ func (cmd *lspCmd) processDefinitionRequest(ctx context.Context, req *lsp.Defini
 						},
 					},
 				}
-				return res
+				resCh <- res
+				return
 			}
 		}
 	}
-	return res
+	resCh <- res
 }
 
 func absolutePath(wd string, importPath string) (string, bool) {
@@ -981,7 +992,7 @@ func absolutePath(wd string, importPath string) (string, bool) {
 	return absPath, true
 }
 
-func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest) *lsp.CodeLensResponse {
+func (cmd *lspCmd) handleCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest, resCh chan interface{}) {
 	res := &lsp.CodeLensResponse{
 		Jsonrpc: "2.0",
 		Id:      req.Id,
@@ -989,17 +1000,20 @@ func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLens
 	}
 	url := lsp.ParseDocumentUri(req.Params.TextDocument.Uri)
 	if url == nil {
-		return res
+		resCh <- res
+		return
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
 	info, errs := wire.Load(ctx, wd, os.Environ(), cmd.tags, pattern)
 	if len(errs) > 0 {
 		lsp.SendErrors(errs)
-		return res
+		resCh <- res
+		return
 	}
 	if info == nil {
-		return res
+		resCh <- res
+		return
 	}
 	var codeLenses []lsp.CodeLens
 	for _, inj := range info.Injectors {
@@ -1036,7 +1050,7 @@ func (cmd *lspCmd) processCodeLensRequest(ctx context.Context, req *lsp.CodeLens
 		)
 	}
 	res.Result = codeLenses
-	return res
+	resCh <- res
 }
 
 func makeCodeLens(info *wire.Info, pos token.Pos, title string, cmd string, args []interface{}) lsp.CodeLens {
@@ -1062,10 +1076,11 @@ func makeCodeLens(info *wire.Info, pos token.Pos, title string, cmd string, args
 	}
 }
 
-func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, event *lsp.DidSaveTextDocumentNotification) (*lsp.PublishDiagnosticsNotification, bool) {
+func (cmd *lspCmd) handlePublishDiagnosticsNotification(ctx context.Context, event *lsp.DidSaveTextDocumentNotification, resCh chan interface{}) {
 	url := lsp.ParseDocumentUri(event.Params.TextDocument.Uri)
 	if url == nil {
-		return nil, false
+		resCh <- nil
+		return
 	}
 	wd := filepath.Dir(url.Path)
 	pattern := []string{"."}
@@ -1095,7 +1110,7 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 			Message: wireErr.Message(),
 		})
 	}
-	notif := &lsp.PublishDiagnosticsNotification{
+	res := &lsp.PublishDiagnosticsNotification{
 		Jsonrpc: "2.0",
 		Method:  "textDocument/publishDiagnostics",
 		Params: lsp.PublishDiagnosticsParams{
@@ -1103,5 +1118,5 @@ func (cmd *lspCmd) createPublishDiagnosticsNotification(ctx context.Context, eve
 			Diagnostics: diags,
 		},
 	}
-	return notif, true
+	resCh <- res
 }
