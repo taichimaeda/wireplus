@@ -805,7 +805,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 			case "exit":
 				return subcommands.ExitFailure
 			// TODO: Support client with autosave disabled.
-			case "textDocument/didOpen", "textDocument/didSave", "textDocument/didChange":
+			case "textDocument/didOpen", "textDocument/didSave":
 				notif := &lsp.TextDocumentNotification{}
 				if ok := lsp.ParseRequest(buf, notif); !ok {
 					continue
