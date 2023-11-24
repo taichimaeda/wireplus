@@ -43,7 +43,10 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
+const Version = "v0.1.5"
+
 func main() {
+	// Register the subcommands.
 	subcommands.Register(subcommands.CommandsCommand(), "")
 	subcommands.Register(subcommands.FlagsCommand(), "")
 	subcommands.Register(subcommands.HelpCommand(), "")
@@ -54,12 +57,24 @@ func main() {
 	subcommands.Register(&detailCmd{}, "")
 	subcommands.Register(&graphCmd{}, "")
 	subcommands.Register(&lspCmd{}, "")
+
+	// Register a flag to print the version.
+	var version bool
+	flag.CommandLine.BoolVar(&version, "version", false, "print the version and exit")
+
+	// Parse the command-line flags.
 	flag.Parse()
 
 	// Initialize the default logger to log to stderr.
 	log.SetFlags(0)
-	log.SetPrefix("wire: ")
+	log.SetPrefix("wireplus: ")
 	log.SetOutput(os.Stderr)
+
+	// Print the version and exit if version flag is set.
+	if version {
+		log.Println(Version)
+		os.Exit(0)
+	}
 
 	// TODO(rvangent): Use subcommands's VisitCommands instead of hardcoded map,
 	// once there is a release that contains it:
