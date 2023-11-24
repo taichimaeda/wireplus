@@ -72,8 +72,9 @@ func main() {
 
 	// Print the version and exit if version flag is set.
 	if version {
+		log.SetOutput(os.Stdout)
 		log.Println(Version)
-		os.Exit(0)
+		os.Exit(int(subcommands.ExitSuccess))
 	}
 
 	// TODO(rvangent): Use subcommands's VisitCommands instead of hardcoded map,
