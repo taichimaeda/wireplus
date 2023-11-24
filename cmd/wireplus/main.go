@@ -27,12 +27,10 @@ import (
 	"go/types"
 	"io/ioutil"
 	"log"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -695,13 +693,13 @@ func (cmd *detailCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inte
 }
 
 type graphCmd struct {
-	tags    string
-	browser bool
+	tags   string
+	format string
 }
 
 func (*graphCmd) Name() string { return "graph" }
 func (*graphCmd) Synopsis() string {
-	return "visualize providers as graph using grpahviz"
+	return "visualize providers as graph using grpahviz or cytospace"
 }
 func (*graphCmd) Usage() string {
 	return `graph [package] [name]
@@ -711,7 +709,7 @@ func (*graphCmd) Usage() string {
 }
 func (cmd *graphCmd) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&cmd.tags, "tags", "", "append build tags to the default wirebuild")
-	f.BoolVar(&cmd.browser, "browser", false, "show generated graph in browser")
+	f.StringVar(&cmd.format, "format", "graphviz", "specify the output format (graphviz or cytospace)")
 }
 func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interface{}) subcommands.ExitStatus {
 	wd, err := os.Getwd()
@@ -725,40 +723,15 @@ func (cmd *graphCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...inter
 	}
 	pattern := []string{f.Args()[0]}
 	name := f.Args()[1]
-	gviz, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags)
+	data, errs := wire.Graph(ctx, wd, os.Environ(), pattern, name, cmd.tags, cmd.format)
 	if len(errs) > 0 {
 		logErrors(errs)
 		log.Println("graph failed")
 		return subcommands.ExitFailure
 	}
-	if cmd.browser {
-		if err := showGraphInBrowser(gviz); err != nil {
-			log.Println("failed to show graph in browser: ", err)
-			return subcommands.ExitFailure
-		} else {
-			return subcommands.ExitSuccess
-		}
-	}
-	// Print data to stdout as output
-	fmt.Println(gviz.String())
+	// Print the graph data to stdout as output
+	fmt.Println(data)
 	return subcommands.ExitSuccess
-}
-
-func showGraphInBrowser(gviz *wire.Graphviz) error {
-	data := gviz.String()
-	dot := strings.Replace(url.QueryEscape(data), "+", "%20", -1)
-	// TODO: Make this customisable
-	url := "https://edotor.net/#" + dot
-	switch runtime.GOOS {
-	case "linux":
-		return exec.Command("xdg-open", url).Start()
-	case "windows":
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	case "darwin":
-		return exec.Command("open", url).Start()
-	default:
-		return fmt.Errorf("unsupported platform")
-	}
 }
 
 type lspCmd struct {
@@ -894,6 +867,8 @@ func (cmd *lspCmd) handleShutdownRequest(req *lsp.ShutdownRequest, resCh chan in
 	resCh <- res
 }
 
+// This is a temporary implementation and this is not supported by the extension client.
+// TODO: Fix inconsistent definition jumps
 func (cmd *lspCmd) handleDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest, resCh chan interface{}) {
 	res := &lsp.DefinitionResponse{
 		Jsonrpc: "2.0",
