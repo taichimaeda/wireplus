@@ -40,7 +40,7 @@ import (
 	"golang.org/x/tools/go/types/typeutil"
 )
 
-const Version = "v0.1.5"
+const Version = "v0.1.6"
 
 func main() {
 	// Register the subcommands.
