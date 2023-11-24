@@ -22,13 +22,11 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"go/ast"
 	"go/token"
 	"go/types"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -39,7 +37,6 @@ import (
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/taichimaeda/wireplus/internal/wire"
 	"github.com/taichimaeda/wireplus/internal/wire/lsp"
-	"golang.org/x/tools/go/ast/astutil"
 	"golang.org/x/tools/go/types/typeutil"
 )
 
@@ -839,12 +836,6 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 					continue
 				}
 				go cmd.handleCodeLensRequest(ctx, req, resCh)
-			case "textDocument/definition":
-				req := &lsp.DefinitionRequest{}
-				if ok := lsp.ParseRequest(buf, req); !ok {
-					continue
-				}
-				go cmd.handleDefinitionRequest(ctx, req, resCh)
 			default:
 				lsp.SendError("invalid method: %v\n", method)
 			}
@@ -860,8 +851,6 @@ func (cmd *lspCmd) handleInitializeRequest(req *lsp.InitializeRequest, resCh cha
 			Capabilities: lsp.ServerCapabilities{
 				TextDocumentSync: 2, // 2: Incremental
 				CodeLensProvider: true,
-				// TODO: Uncomment when we properly support definition jumps
-				// DefinitionProvider: true,
 			},
 		},
 	}
@@ -881,108 +870,6 @@ func (cmd *lspCmd) handleShutdownRequest(req *lsp.ShutdownRequest, resCh chan in
 		Result:  nil,
 	}
 	resCh <- res
-}
-
-// This is a temporary implementation and this is not supported by the extension client.
-// TODO: Fix inconsistent definition jumps
-func (cmd *lspCmd) handleDefinitionRequest(ctx context.Context, req *lsp.DefinitionRequest, resCh chan interface{}) {
-	res := &lsp.DefinitionResponse{
-		Jsonrpc: "2.0",
-		Id:      req.Id,
-		Result:  nil,
-	}
-	url := lsp.ParseDocumentUri(req.Params.TextDocument.Uri)
-	if url == nil {
-		resCh <- res
-		return
-	}
-	wd := filepath.Dir(url.Path)
-	pattern := []string{"."}
-	pkgs, errs := wire.LoadPackages(ctx, wd, os.Environ(), cmd.tags, pattern)
-	if len(errs) > 0 {
-		lsp.SendErrors(errs)
-		resCh <- res
-		return
-	}
-	if len(pkgs) != 1 {
-		lsp.SendError("expected exactly one package")
-		resCh <- res
-		return
-	}
-	pkg := pkgs[0]
-	line := req.Params.Position.Line
-	char := req.Params.Position.Character
-	pos := lsp.CalculatePos(pkg.Fset, url.Path, line, char)
-	for _, f := range pkg.Syntax {
-		file := pkg.Fset.File(f.Pos())
-		if base := file.Base(); base <= int(pos) && int(pos) < base+file.Size() {
-			path, ok := astutil.PathEnclosingInterval(f, pos, pos)
-			if !ok {
-				lsp.SendError("invalid position within file")
-				resCh <- res
-				return
-			}
-			node := path[0]
-			if ident, ok := node.(*ast.Ident); ok {
-				// TODO: Check this works for packages above the wd
-				tarObj := pkg.TypesInfo.ObjectOf(ident)
-				tarWd, ok := absolutePath(wd, tarObj.Pkg().Path())
-				if !ok {
-					lsp.SendError("unknown import path")
-					resCh <- res
-					return
-				}
-				tarPattern := []string{"."}
-				tarPkgs, errs := wire.LoadPackages(ctx, tarWd, os.Environ(), cmd.tags, tarPattern)
-				if len(errs) > 0 {
-					lsp.SendErrors(errs)
-					resCh <- res
-					return
-				}
-				if len(tarPkgs) != 1 {
-					lsp.SendError("expected exactly one package")
-					resCh <- res
-					return
-				}
-				tarPkg := tarPkgs[0]
-				// TODO: Somehow jumps to a random position
-				tarPosition := tarPkg.Fset.Position(tarObj.Pos())
-				tarFilename := tarPosition.Filename
-				tarLine := tarPosition.Line
-				tarChar := tarPosition.Column
-				res.Result = &lsp.Location{
-					Uri: tarFilename,
-					Range: lsp.Range{
-						Start: lsp.Position{
-							Line:      tarLine,
-							Character: tarChar,
-						},
-						End: lsp.Position{
-							Line:      tarLine,
-							Character: tarChar,
-						},
-					},
-				}
-				resCh <- res
-				return
-			}
-		}
-	}
-	resCh <- res
-}
-
-func absolutePath(wd string, importPath string) (string, bool) {
-	tmp := "go list -f '{{.ImportPath}}:{{.Dir}}' all | grep "
-	cmd := exec.Command("sh", "-c", tmp+importPath)
-	cmd.Dir = wd
-	stdout, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", false
-	}
-	line := string(stdout)
-	parts := strings.Split(line, ":")
-	absPath := strings.TrimSpace(parts[1])
-	return absPath, true
 }
 
 func (cmd *lspCmd) handleCodeLensRequest(ctx context.Context, req *lsp.CodeLensRequest, resCh chan interface{}) {

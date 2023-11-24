@@ -59,10 +59,9 @@ type InitializeResult struct {
 }
 
 type ServerCapabilities struct {
-	TextDocumentSync   int                         `json:"textDocumentSync"`
-	CodeLensProvider   bool                        `json:"codeLensProvider"`
-	DefinitionProvider bool                        `json:"definitionProvider"`
-	Workspace          WorkspaceServerCapabilities `json:"workspace"`
+	TextDocumentSync int                         `json:"textDocumentSync"`
+	CodeLensProvider bool                        `json:"codeLensProvider"`
+	Workspace        WorkspaceServerCapabilities `json:"workspace"`
 }
 
 type WorkspaceServerCapabilities struct {
@@ -82,24 +81,6 @@ type ShutdownResponse struct {
 	Jsonrpc string      `json:"jsonrpc"`
 	Id      int         `json:"id"`
 	Result  interface{} `json:"result"`
-}
-
-type DefinitionRequest struct {
-	Jsonrpc string           `json:"jsonrpc"`
-	Id      int              `json:"id"`
-	Method  string           `json:"method"`
-	Params  DefinitionParams `json:"Params"`
-}
-
-type DefinitionParams struct {
-	TextDocument TextDocumentIdentifier `json:"textDocument"`
-	Position     Position               `json:"position"`
-}
-
-type DefinitionResponse struct {
-	Jsonrpc string    `json:"jsonrpc"`
-	Id      int       `json:"id"`
-	Result  *Location `json:"result"`
 }
 
 type CodeLensRequest struct {
