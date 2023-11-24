@@ -94,7 +94,11 @@ func callKey(call *call, fset *token.FileSet) string {
 }
 
 func formatKey(key string) string {
-	return `"` + strings.Replace(key, "#", `\n`, -1) + `"`
+	return strings.Replace(key, "#", "\n", -1)
+}
+
+func quoteString(str string) string {
+	return `"` + str + `"`
 }
 
 // parentKeys the parent provider sets as a slice of keys, from the furtherest to the nearest.
@@ -138,7 +142,7 @@ func newGraphvizBuilder() GraphBuilder {
 func (builder *GraphvizBuilder) addInputsForNewSet(missing []*types.Type) {
 	for _, m := range missing {
 		key := (*m).String()
-		label := formatKey(key)
+		label := quoteString(formatKey(key))
 		// Each missing input in wire.NewSet has no dependency and thus becomes a terminating node.
 		builder.gviz.AddNode("cluster-all", key, map[string]string{
 			"label": label,
@@ -150,7 +154,7 @@ func (builder *GraphvizBuilder) addInputsForNewSet(missing []*types.Type) {
 func (builder *GraphvizBuilder) addInputsForBuild(ins []*types.Var) {
 	for _, in := range ins {
 		key := inputKey(in)
-		label := formatKey(key)
+		label := quoteString(formatKey(key))
 		// Each input for wire.Build has no dependency and thus becomes a terminating node.
 		builder.gviz.AddNode("cluster-all", key, map[string]string{
 			"label": label,
@@ -180,7 +184,7 @@ func (builder *GraphvizBuilder) addOutputs(calls []call, pset *ProviderSet, fset
 			// Create parent subgraphs if not present.
 			// The prefix "cluster" is required for grouping nodes in Graphviz
 			curKey := "cluster-" + parentKeys[j]
-			curLabel := formatKey(curKey)
+			curLabel := quoteString(formatKey(curKey))
 			parKey := "cluster-" + parentKeys[j-1]
 			if !builder.gviz.IsSubGraph(curKey) {
 				builder.gviz.AddSubGraph(parKey, curKey, map[string]string{
@@ -192,7 +196,7 @@ func (builder *GraphvizBuilder) addOutputs(calls []call, pset *ProviderSet, fset
 
 		// Find information about the current provider.
 		key := callKey(&call, fset)
-		label := formatKey(key)
+		label := quoteString(formatKey(key))
 		parent := "cluster-" + parentKeys[len(parentKeys)-1]
 		// Find the shape for this node.
 		var shape string
@@ -258,7 +262,6 @@ type CytospaceNodeData struct {
 	Parent *string `json:"parent"` // optional
 	// These are custom fields and are not required by cytospace.
 	Content  string `json:"content"`
-	Tooltip  string `json:"tooltip"`
 	Subgraph bool   `json:"subgraph"`
 	Shape    string `json:"shape"`
 }
@@ -296,14 +299,12 @@ func newCytospaceBuilder() GraphBuilder {
 func (builder *CytospaceBuilder) addInputsForNewSet(missing []*types.Type) {
 	for _, m := range missing {
 		key := (*m).String()
-		content := strings.Split(key, "#")[0]
-		tooltip := strings.Split(key, "#")[1]
+		content := formatKey(key)
 		// Each missing input in wire.NewSet has no dependency and thus becomes a terminating node.
 		builder.elems.Nodes = append(builder.elems.Nodes, CytospaceNode{
 			Data: CytospaceNodeData{
 				Id:      key,
 				Content: content,
-				Tooltip: tooltip,
 				Shape:   "octagon",
 			},
 		})
@@ -313,14 +314,12 @@ func (builder *CytospaceBuilder) addInputsForNewSet(missing []*types.Type) {
 func (builder *CytospaceBuilder) addInputsForBuild(ins []*types.Var) {
 	for _, in := range ins {
 		key := inputKey(in)
-		content := strings.Split(key, "#")[0]
-		tooltip := strings.Split(key, "#")[1]
+		content := formatKey(key)
 		// Each input for wire.Build has no dependency and thus becomes a terminating node.
 		builder.elems.Nodes = append(builder.elems.Nodes, CytospaceNode{
 			Data: CytospaceNodeData{
 				Id:      key,
 				Content: content,
-				Tooltip: tooltip,
 				Shape:   "octagon",
 			},
 		})
@@ -342,8 +341,7 @@ func (builder *CytospaceBuilder) addOutputs(calls []call, pset *ProviderSet, fse
 		for j := range parentKeys {
 			// Create parent subgraphs if not present.
 			curKey := parentKeys[j]
-			curContent := strings.Split(curKey, "#")[0]
-			curTooltip := strings.Split(curKey, "#")[1]
+			curContent := formatKey(curKey)
 			var parKey *string
 			if j > 0 {
 				parKey = &parentKeys[j-1]
@@ -354,7 +352,6 @@ func (builder *CytospaceBuilder) addOutputs(calls []call, pset *ProviderSet, fse
 					Data: CytospaceNodeData{
 						Id:       curKey,
 						Content:  curContent,
-						Tooltip:  curTooltip,
 						Subgraph: true,
 						Parent:   parKey,
 						Shape:    "rectangle",
@@ -365,8 +362,7 @@ func (builder *CytospaceBuilder) addOutputs(calls []call, pset *ProviderSet, fse
 
 		// Find information about the current provider.
 		key := callKey(&call, fset)
-		content := strings.Split(key, "#")[0]
-		tooltip := strings.Split(key, "#")[1]
+		content := formatKey(key)
 		// Find the parent label for this node.
 		var parent *string
 		if len(parentKeys) > 0 {
@@ -388,7 +384,6 @@ func (builder *CytospaceBuilder) addOutputs(calls []call, pset *ProviderSet, fse
 				Id:      key,
 				Parent:  parent,
 				Content: content,
-				Tooltip: tooltip,
 				Shape:   shape,
 			},
 		})
