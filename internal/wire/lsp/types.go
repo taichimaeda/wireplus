@@ -46,7 +46,6 @@ type ClientCapabilities struct {
 }
 
 type WorkspaceClientCapabilities struct {
-	Configuration    bool `json:"configuration"`
 	WorkspaceFolders bool `json:"workspaceFolders"`
 }
 
@@ -125,13 +124,13 @@ type CodeLens struct {
 	Command Command `json:"command"`
 }
 
-type DidSaveTextDocumentNotification struct {
-	Jsonrpc string                    `json:"jsonrpc"`
-	Method  string                    `json:"method"`
-	Params  DidSaveTextDocumentParams `json:"params"`
+type TextDocumentNotification struct {
+	Jsonrpc string             `json:"jsonrpc"`
+	Method  string             `json:"method"`
+	Params  TextDocumentParams `json:"params"`
 }
 
-type DidSaveTextDocumentParams struct {
+type TextDocumentParams struct {
 	TextDocument TextDocumentIdentifier `json:"textDocument"`
 }
 
