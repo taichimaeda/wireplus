@@ -809,7 +809,7 @@ func (cmd *lspCmd) Execute(ctx context.Context, f *flag.FlagSet, args ...interfa
 				return subcommands.ExitFailure
 			// TODO: Support client with autosave disabled.
 			case "textDocument/didOpen", "textDocument/didSave", "textDocument/didChange":
-				notif := &lsp.DidSaveTextDocumentNotification{}
+				notif := &lsp.TextDocumentNotification{}
 				if ok := lsp.ParseRequest(buf, notif); !ok {
 					continue
 				}
@@ -858,14 +858,14 @@ func (cmd *lspCmd) handleInitializeRequest(req *lsp.InitializeRequest, resCh cha
 		Id:      req.Id,
 		Result: &lsp.InitializeResult{
 			Capabilities: lsp.ServerCapabilities{
-				TextDocumentSync:   2, // 2: Incremental
-				CodeLensProvider:   true,
-				DefinitionProvider: true,
+				TextDocumentSync: 2, // 2: Incremental
+				CodeLensProvider: true,
+				// TODO: Uncomment when we properly support definition jumps
+				// DefinitionProvider: true,
 			},
 		},
 	}
 	wsClientCap := req.Params.Capabilities.Workspace
-	// configCap := wsClientCap.Configuration
 	wsConfigCap := wsClientCap.WorkspaceFolders
 	if wsConfigCap {
 		wsServerCap := res.Result.Capabilities.Workspace
@@ -1069,7 +1069,7 @@ func makeCodeLens(info *wire.Info, pos token.Pos, title string, cmd string, args
 	}
 }
 
-func (cmd *lspCmd) handlePublishDiagnosticsNotification(ctx context.Context, event *lsp.DidSaveTextDocumentNotification, resCh chan interface{}) {
+func (cmd *lspCmd) handlePublishDiagnosticsNotification(ctx context.Context, event *lsp.TextDocumentNotification, resCh chan interface{}) {
 	url := lsp.ParseDocumentUri(event.Params.TextDocument.Uri)
 	if url == nil {
 		resCh <- nil
